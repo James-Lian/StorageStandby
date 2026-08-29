@@ -1,0 +1,12 @@
+<Solution>
+  <Configurations>
+    <Platform Name="Any CPU" />
+    <Platform Name="x64" />
+  </Configurations>
+  <Project Path="StorageStandby.Backend/StorageStandby.Backend.csproj" Id="19c2165a-5a1b-411e-80f8-0aa95076582f">
+    <Platform Solution="*|x64" Project="x64" />
+  </Project>
+  <Project Path="StorageStandby.Desktop/StorageStandby.Desktop.csproj" Id="aaeb41e9-3f44-4aee-aa3d-774a8b373694">
+    <Platform Solution="*|x64" Project="x64" />
+  </Project>
+</Solution>
