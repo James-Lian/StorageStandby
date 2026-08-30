@@ -124,10 +124,23 @@ using (var scope = app.Services.CreateScope())
 // REACT VITE MINIMAL API ENDPOINTS (http://storagestandby.local) - these are consumed by the React frontend via fetch()
 // -------------------------------------------------------------------
 
-app.MapMethods("/api/auth/{provider}/{action}", new[] { "OPTIONS" }, () =>
-{
-    return Results.Ok();
-});
+// -------------------------------------------------------------------
+// OPTIONS: catch-all CORS preflight fallback
+// The Desktop app's WebResourceRequested handler now forwards Origin +
+// Access-Control-Request-* headers down the pipe, so the CORS middleware
+// (app.UseCors("AllowFrontend") above) handles real preflight requests and
+// short-circuits them with a 204 + the proper Access-Control-Allow-* headers.
+// This catch-all only catches non-preflight OPTIONS calls (e.g. from tools like
+// curl) that the middleware passes through. Specific GET/POST routes always win
+// via route precedence.
+app.MapMethods("/api/{**path}", new[] { "OPTIONS" }, () => Results.NoContent());
+
+// -------------------------------------------------------------------
+// AUTH: OPTIONS
+// app.MapMethods("/api/auth/{provider}/{action}", new[] { "OPTIONS" }, (string provider, string action) =>
+// {
+//     return Results.Ok();
+// });
 
 // -------------------------------------------------------------------
 // RFC 7807 ProblemDetails EXAMPLE...

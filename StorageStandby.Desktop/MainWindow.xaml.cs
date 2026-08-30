@@ -91,6 +91,24 @@ namespace StorageStandby.Desktop
 
                         using var outboundRequest = new HttpRequestMessage(method, requestUri);
 
+                        // Forward CORS-related headers from the WebView request down the pipe.
+                        // The backend's CORS middleware (app.UseCors("AllowFrontend")) needs to
+                        // see Origin + Access-Control-Request-* to evaluate the origin and answer
+                        // preflight (OPTIONS) requests itself with the proper Access-Control-Allow-*
+                        // headers -- this lets the backend own CORS instead of this Desktop app.
+                        if (args.Request.Headers.Contains("Origin"))
+                        {
+                            outboundRequest.Headers.TryAddWithoutValidation("Origin", args.Request.Headers.GetHeader("Origin"));
+                        }
+                        if (args.Request.Headers.Contains("Access-Control-Request-Method"))
+                        {
+                            outboundRequest.Headers.TryAddWithoutValidation("Access-Control-Request-Method", args.Request.Headers.GetHeader("Access-Control-Request-Method"));
+                        }
+                        if (args.Request.Headers.Contains("Access-Control-Request-Headers"))
+                        {
+                            outboundRequest.Headers.TryAddWithoutValidation("Access-Control-Request-Headers", args.Request.Headers.GetHeader("Access-Control-Request-Headers"));
+                        }
+
                         // forward the payload down the pipe if it's a POST/PUT request
                         if (args.Request.Content != null)
                         {
@@ -151,18 +169,19 @@ namespace StorageStandby.Desktop
                             }
                         }
 
-                        // Ensure Content-Type exists
-                        if (!headerString.Contains("Content-Type"))
+                        // Ensure Content-Type exists (only meaningful when there's a body;
+                        // a 204 preflight response from the CORS middleware has none)
+                        if (contentBytes.Length > 0 && !headerString.Contains("Content-Type"))
                         {
                             headerString += "Content-Type: application/json\r\n";
                             Debug.WriteLine($"[Headers] Added default Content-Type");
                         }
 
-                        // Add CORS headers
-                        headerString += "Access-Control-Allow-Origin: *\r\n";
-                        headerString += "Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS\r\n";
-                        headerString += "Access-Control-Allow-Headers: Content-Type\r\n";
-                        Debug.WriteLine($"[Headers] Added CORS headers");
+                        // NOTE: CORS headers are no longer injected here. The backend's CORS
+                        // middleware (app.UseCors("AllowFrontend")) now supplies the proper
+                        // Access-Control-Allow-* headers on every response (the Origin /
+                        // Access-Control-Request-* request headers forwarded above let it
+                        // evaluate each request), so the whole app shares one CORS policy.
 
                         // Add Content-Length
                         headerString += $"Content-Length: {contentBytes.Length}\r\n";
