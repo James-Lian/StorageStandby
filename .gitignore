@@ -453,3 +453,4 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+build_log.txt
