@@ -83,7 +83,28 @@ export async function fetchWatchedFolder(localPath: string) {
 }
 
 export async function fetchFolderIgnoreRules() {
+    try {
+        
+    }
+    catch (error) {
+        if (error instanceof Error && error.message.startsWith("fetchFolderIgnoreRules:")) {
+            throw error
+        }
 
+        logError({
+            title: "fetchFolderIgnoreRules: Failed to fetch all watched folders",
+            details: error instanceof Error
+                ? {
+                    name: error.name,
+                    message: error.message,
+                    stack: error.stack,
+                    cause: error.cause,
+                }
+                : error,
+        })
+
+        throw error
+    }
 }
 
 export async function editFolderIgnoreRules(localPath: string, newIgnoreRules: string) {
