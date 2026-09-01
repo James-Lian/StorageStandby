@@ -48,7 +48,7 @@ namespace StorageStandby.Backend.Migrations
 
             modelBuilder.Entity("StorageStandby.Backend.Models.SyncEvent", b =>
                 {
-                    b.Property<int>("Id")
+                    b.Property<long>("Id")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("INTEGER");
 
@@ -56,21 +56,31 @@ namespace StorageStandby.Backend.Migrations
                         .IsRequired()
                         .HasColumnType("TEXT");
 
+                    b.Property<DateTime?>("CompletedTimestamp")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("CompletionType")
+                        .HasColumnType("INTEGER");
+
                     b.Property<string>("Details")
                         .HasColumnType("TEXT");
 
-                    b.Property<string>("EventType")
+                    b.Property<string>("MetadataJson")
                         .IsRequired()
                         .HasColumnType("TEXT");
 
                     b.Property<int>("Provider")
                         .HasColumnType("INTEGER");
 
+                    b.Property<string>("SyncedItems")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
                     b.Property<int?>("SystemSettingsId")
                         .HasColumnType("INTEGER");
 
-                    b.Property<DateTime>("Timestamp")
-                        .HasColumnType("TEXT");
+                    b.Property<long>("WatchedFolderId")
+                        .HasColumnType("INTEGER");
 
                     b.HasKey("Id");
 
@@ -85,18 +95,15 @@ namespace StorageStandby.Backend.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("INTEGER");
 
-                    b.PrimitiveCollection<string>("BackupIgnoreProfile")
+                    b.Property<string>("GlobalIgnoreRules")
                         .IsRequired()
                         .HasColumnType("TEXT");
 
-                    b.Property<long>("LargeFolderThresholdBytes")
+                    b.Property<int?>("GlobalPreferredProvider")
                         .HasColumnType("INTEGER");
 
                     b.Property<DateTime?>("PauseSyncUntil")
                         .HasColumnType("TEXT");
-
-                    b.Property<int?>("PreferredProvider")
-                        .HasColumnType("INTEGER");
 
                     b.HasKey("Id");
 
@@ -106,19 +113,28 @@ namespace StorageStandby.Backend.Migrations
                         new
                         {
                             Id = 1,
-                            BackupIgnoreProfile = "[\"*.tmp\",\"node_modules/\"]",
-                            LargeFolderThresholdBytes = 1073741824L
+                            GlobalIgnoreRules = "*.tmp;node_modules/"
                         });
                 });
 
-            modelBuilder.Entity("StorageStandby.Backend.Models.WatchedChild", b =>
+            modelBuilder.Entity("StorageStandby.Backend.Models.WatchedFolder", b =>
                 {
-                    b.Property<int>("Id")
+                    b.Property<long>("Id")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("INTEGER");
 
                     b.Property<DateTime>("DateAdded")
                         .HasColumnType("TEXT");
+
+                    b.Property<string>("IgnoreRules")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("IsZipCompressionEnabled")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<bool>("KeepSnapshotsInSameAccount")
+                        .HasColumnType("INTEGER");
 
                     b.Property<DateTime?>("LastSync")
                         .HasColumnType("TEXT");
@@ -126,24 +142,33 @@ namespace StorageStandby.Backend.Migrations
                     b.Property<string>("LocalPath")
                         .HasColumnType("TEXT");
 
-                    b.Property<int>("ParentId")
+                    b.Property<int?>("PreferredProvider")
                         .HasColumnType("INTEGER");
 
-                    b.Property<int?>("SyncEventId")
+                    b.Property<int>("Priority")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int?>("Problem")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("SnapshotUrls")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("SyncFrequency")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<bool>("TrackSnapshots")
                         .HasColumnType("INTEGER");
 
                     b.HasKey("Id");
 
-                    b.HasIndex("ParentId");
-
-                    b.HasIndex("SyncEventId");
-
-                    b.ToTable("WatchedChild");
+                    b.ToTable("WatchedFolders");
                 });
 
             modelBuilder.Entity("StorageStandby.Backend.Models.WatchedFolderCloudMetadata", b =>
                 {
-                    b.Property<int>("Id")
+                    b.Property<long>("Id")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("INTEGER");
 
@@ -155,48 +180,21 @@ namespace StorageStandby.Backend.Migrations
                         .IsRequired()
                         .HasColumnType("TEXT");
 
-                    b.Property<string>("FolderId")
-                        .IsRequired()
-                        .HasColumnType("TEXT");
-
                     b.Property<int>("Provider")
                         .HasColumnType("INTEGER");
 
-                    b.Property<int?>("WatchedFolderParentId")
-                        .HasColumnType("INTEGER");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("WatchedFolderParentId");
-
-                    b.ToTable("WatchedFolderCloudMetadata");
-                });
-
-            modelBuilder.Entity("StorageStandby.Backend.Models.WatchedFolderParent", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("INTEGER");
-
-                    b.Property<DateTime>("DateAdded")
-                        .HasColumnType("TEXT");
-
-                    b.Property<bool>("IsZipCompressionEnabled")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<DateTime?>("LastSync")
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("LocalPath")
-                        .HasColumnType("TEXT");
-
-                    b.PrimitiveCollection<string>("PathsBlacklist")
+                    b.Property<string>("RemoteFolderId")
                         .IsRequired()
                         .HasColumnType("TEXT");
 
+                    b.Property<long>("WatchedFolderId")
+                        .HasColumnType("INTEGER");
+
                     b.HasKey("Id");
 
-                    b.ToTable("WatchedFolders");
+                    b.HasIndex("WatchedFolderId");
+
+                    b.ToTable("WatchedFolderCloudMetadata");
                 });
 
             modelBuilder.Entity("StorageStandby.Backend.Models.SyncEvent", b =>
@@ -206,31 +204,15 @@ namespace StorageStandby.Backend.Migrations
                         .HasForeignKey("SystemSettingsId");
                 });
 
-            modelBuilder.Entity("StorageStandby.Backend.Models.WatchedChild", b =>
+            modelBuilder.Entity("StorageStandby.Backend.Models.WatchedFolderCloudMetadata", b =>
                 {
-                    b.HasOne("StorageStandby.Backend.Models.WatchedFolderParent", "Parent")
-                        .WithMany("WatchedChildren")
-                        .HasForeignKey("ParentId")
+                    b.HasOne("StorageStandby.Backend.Models.WatchedFolder", "WatchedFolder")
+                        .WithMany("AssignedClouds")
+                        .HasForeignKey("WatchedFolderId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
-                    b.HasOne("StorageStandby.Backend.Models.SyncEvent", null)
-                        .WithMany("SyncedItems")
-                        .HasForeignKey("SyncEventId");
-
-                    b.Navigation("Parent");
-                });
-
-            modelBuilder.Entity("StorageStandby.Backend.Models.WatchedFolderCloudMetadata", b =>
-                {
-                    b.HasOne("StorageStandby.Backend.Models.WatchedFolderParent", null)
-                        .WithMany("AssignedClouds")
-                        .HasForeignKey("WatchedFolderParentId");
-                });
-
-            modelBuilder.Entity("StorageStandby.Backend.Models.SyncEvent", b =>
-                {
-                    b.Navigation("SyncedItems");
+                    b.Navigation("WatchedFolder");
                 });
 
             modelBuilder.Entity("StorageStandby.Backend.Models.SystemSettings", b =>
@@ -238,11 +220,9 @@ namespace StorageStandby.Backend.Migrations
                     b.Navigation("SyncEvents");
                 });
 
-            modelBuilder.Entity("StorageStandby.Backend.Models.WatchedFolderParent", b =>
+            modelBuilder.Entity("StorageStandby.Backend.Models.WatchedFolder", b =>
                 {
                     b.Navigation("AssignedClouds");
-
-                    b.Navigation("WatchedChildren");
                 });
 #pragma warning restore 612, 618
         }
