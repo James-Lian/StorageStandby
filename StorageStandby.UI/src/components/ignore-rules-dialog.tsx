@@ -249,9 +249,15 @@ export function IgnoreRulesDialog({
                     <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
                         Cancel
                     </Button>
-                    <Button type="button" onClick={applyChanges}>
-                        Apply
-                    </Button>
+                    {activeTab == "ui" ? 
+                        <Button type="button" onClick={applyChanges}>
+                            Ok
+                        </Button>
+                    : 
+                        <Button type="button" onClick={applyChanges}>
+                            Apply
+                        </Button>
+                    }
                 </DialogFooter>
             </DialogContent>
         </Dialog>
