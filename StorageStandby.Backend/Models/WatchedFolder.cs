@@ -24,15 +24,6 @@
         Critical = 3
     }
 
-    public enum SyncFrequency
-    {
-        Inactive = 0,
-        Daily = 1,
-        Weekly = 2,
-        Monthly = 3,
-        Yearly = 4
-    }
-
     // only the roots are selected by the user + ignore rules
     public class WatchedFolder
     {
@@ -60,7 +51,7 @@
         // Sync state information
         public DateTime? LastSync { get; set; }
         public DateTime DateAdded { get; set; }
-        public SyncFrequency SyncFrequency { get; set; } = SyncFrequency.Weekly;
+        public SyncFrequency? CustomSyncFrequency { get; set; } = null;
     }
 
     public class WatchedFolderCloudMetadata
@@ -69,7 +60,6 @@
         public Providers Provider { get; set; }
         public string AccountId { get; set; }
         public string RemoteFolderId { get; set; }
-
 
         // Foreign key to link back to the WatchedFolder in EF Core
         // Fully Defined Relationship - object reference + id

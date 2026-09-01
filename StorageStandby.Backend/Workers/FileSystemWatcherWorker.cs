@@ -287,31 +287,31 @@ namespace StorageStandby.Backend.Workers
             // Sync/Object Updates
 
             // Create short-lived DB scope to save sync staging state
-            using var scope = _scopeFactory.CreateScope();
-            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            // using var scope = _scopeFactory.CreateScope();
+            // var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
-            var existingRecord = await db.FileSyncRecords
-                .FirstOrDefaultAsync(f => f.WatchedFolderId == folder.Id && f.LocalPath == filePath);
+            // var existingRecord = await db.FileSyncRecords
+            //     .FirstOrDefaultAsync(f => f.WatchedFolderId == folder.Id && f.LocalPath == filePath);
 
-            if (existingRecord == null)
-            {
-                db.FileSyncRecords.Add(new FileSyncRecord
-                {
-                    WatchedFolderId = folder.Id,
-                    LocalPath = filePath,
-                    CloudId = null,
-                    FileHash = string.Empty,
-                    LastModifiedLocal = File.Exists(filePath) ? File.GetLastWriteTimeUtc(filePath) : DateTime.UtcNow,
-                    LastSyncedToCloud = DateTime.MinValue // Flags for upload
-                });
-            }
-            else
-            {
-                existingRecord.LastModifiedLocal = File.Exists(filePath) ? File.GetLastWriteTimeUtc(filePath) : DateTime.UtcNow;
-            }
+            // if (existingRecord == null)
+            // {
+            //     db.FileSyncRecords.Add(new FileSyncRecord
+            //     {
+            //         WatchedFolderId = folder.Id,
+            //         LocalPath = filePath,
+            //         CloudId = null,
+            //         FileHash = string.Empty,
+            //         LastModifiedLocal = File.Exists(filePath) ? File.GetLastWriteTimeUtc(filePath) : DateTime.UtcNow,
+            //         LastSyncedToCloud = DateTime.MinValue // Flags for upload
+            //     });
+            // }
+            // else
+            // {
+            //     existingRecord.LastModifiedLocal = File.Exists(filePath) ? File.GetLastWriteTimeUtc(filePath) : DateTime.UtcNow;
+            // }
 
-            await db.SaveChangesAsync();
-            _logger.LogInformation("Staged [{ChangeType}] for file: {Path}", changeType, filePath);
+            // await db.SaveChangesAsync();
+            // _logger.LogInformation("Staged [{ChangeType}] for file: {Path}", changeType, filePath);
 
             // TODO: Push record into SQLite PendingSyncQueue
         }
