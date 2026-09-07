@@ -29,9 +29,10 @@ builder.WebHost.ConfigureKestrel(options =>
     options.ListenNamedPipe("StorageStandbyPipe");
 });
 
-// Register Singleton State machine + long-running filesystem watcher as a hosted background worker
+// Register Singleton State machine + long-running fileSystem watcher as a hosted background worker
 builder.Services.AddSingleton<BackupEngineState>();
 builder.Services.AddSingleton<TokenManager>();
+builder.Services.AddSingleton<LocalFileSystemService>();
 // .NET automatically registers IServiceScopeFactory as a Singleton infrastructure service behind the scenes as soon as the service collection is created -- no need to declare!
 builder.Services.AddDbContext<AppDbContext>(options =>
 {
@@ -159,7 +160,7 @@ app.MapMethods("/api/{**path}", new[] { "OPTIONS" }, () => Results.NoContent());
 app.MapGet("/api/status", (BackupEngineState state) => Results.Ok(new
 {
     Status = state.Status,
-    IsPaused = state.IsPaused,
+    IsPaused = state._isSyncPaused,
     CurrentOperation = state.CurrentOperation,
     LastSyncedFile = state.LastSyncedFile,
     QueueCount = state.ActiveUploadQueueCount,
@@ -169,9 +170,9 @@ app.MapGet("/api/status", (BackupEngineState state) => Results.Ok(new
 // POST: React toggling the pause button
 app.MapPost("/api/sync/pause", (bool pauseState, BackupEngineState state) =>
 {
-    state.IsPaused = pauseState;
+    state._isSyncPaused = pauseState;
     state.Status = pauseState ? "Paused" : "Running";
-    return Results.Ok(new { Paused = state.IsPaused });
+    return Results.Ok(new { Paused = state._isSyncPaused });
 });
 
 app.MapPost("/api/sync/trigger", () =>
@@ -200,11 +201,35 @@ app.MapPost("/api/folders/add", async (
     return Results.Ok(new { Message = "Folder added successfully." });
 });
 
+// -------------------------------------------------------------------
+// (!!) LOCAL FILESYSTEM REST API ENDPOINTS (!!)
+// -------------------------------------------------------------------
+
+app.MapGet("/api/fileSystem/getsize/{localPath}", (
+    string localPath,
+    LocalFileSystemService fileSystem) =>
+{
+    return fileSystem.GetPathSize(localPath);
+});
+
+app.MapGet("/api/fileSystem/isfolder/{localPath}", (
+    string localPath,
+    LocalFileSystemService fileSystem) =>
+{
+    return fileSystem.IsFolder(localPath);
+});
+
+// Hmm... Ecosia spat out a bunch
+app.MapGet("/api/fileSystem/folder/getchildrencount", (
+    string localPath,
+    LocalFileSystemService fileSystem) =>
+{
+    return fileSystem.GetChildrenCount(localPath);
+});
 
 // -------------------------------------------------------------------
 // (!!) EF CORE-BASED REST API DB ENDPOINTS (!!)
 // -------------------------------------------------------------------
-
 
 // -------------------------------------------------------------------
 // DB: FOLDERS
