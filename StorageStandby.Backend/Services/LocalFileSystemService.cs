@@ -69,5 +69,25 @@ namespace StorageStandby.Backend.Services
 
             return null;
         }
+
+        public class FileFolders {
+            public List<string> Files { get; set; } = new();
+            public List<string> Folders { get; set; } = new();
+        }
+
+        public FileFolders? GetChildren(string path) {
+            if (Directory.Exists(path)) {
+                List<string> files = Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories).ToList();
+                List<string> folders = Directory.EnumerateDirectories(path, "*", SearchOption.AllDirectories).ToList();
+
+                return new FileFolders{
+                    Files = files,
+                    Folders = folders,
+                };
+
+            }
+
+            return null;
+        }
     }
 }

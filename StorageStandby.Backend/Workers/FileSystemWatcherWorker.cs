@@ -2,12 +2,15 @@
 using Microsoft.Extensions.Caching.Memory; // for debouncing file-saving
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using SQLitePCL;
 using StorageStandby.Backend.Core;
 using StorageStandby.Backend.Data;
 using StorageStandby.Backend.Models;
+using StorageStandby.Backend.Services;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
@@ -21,7 +24,7 @@ using System.Threading.Tasks;
 
 namespace StorageStandby.Backend.Workers
 {
-    public class FileSystemWatcherWorker : BackgroundService
+    public class FileSystemWatcherWorker : BackgroundService // DEV: BackgroundService implements the IHostedService and provides a managed loop via ExecuteAsync
     {
         private readonly ILogger<FileSystemWatcherWorker> _logger; // built-in interface used to write log messages - provides a consistent abstraction layer, meaning you can write your logging code once and easily swap out the destination
         private readonly IServiceScopeFactory _scopeFactory;
@@ -29,19 +32,25 @@ namespace StorageStandby.Backend.Workers
         private readonly IMemoryCache _cache; // built-in in-memory caching service
         // thread-safe, key-value dictionary stored directly in your server's RAM
         // updating/saving a file can trigger multiple events in quick succession, so we use this cache to "debounce" the events and avoid redundant uploads
-        private readonly ConcurrentDictionary<string, FileSystemWatcher> _activeWatchers = new(); 
+        private readonly LocalFileSystemService _fileSystem;
+        private CancellationToken _stoppingToken;
+
+        private readonly ConcurrentDictionary<string, FileSystemWatcher> _activeWatchers = new();
+        private readonly ConcurrentDictionary<string, bool> _trackedFolders = new(); // true is folder, false is file 
 
         // ASP.NET natively injects the state and a logger
         public FileSystemWatcherWorker(
             ILogger<FileSystemWatcherWorker> logger,
             IServiceScopeFactory scopeFactory,
-            BackupEngineState state, 
-            IMemoryCache cache)
+            BackupEngineState state,
+            IMemoryCache cache,
+            LocalFileSystemService fileSystem)
         {
             _logger = logger;
             _scopeFactory = scopeFactory;
             _state = state;
             _cache = cache;
+            _fileSystem = fileSystem;
 
             // TODO: wtf is this
             _state.OnNewFolderAdded += AttachWatcher;
@@ -49,27 +58,42 @@ namespace StorageStandby.Backend.Workers
 
         // DEV: protected override - a method that can only be accessed by this class or derived classes, and overrides a base class method
         // DEV: Task - representing an asyncrhonous operation
+        // ExecuteAsync: runs for the lifetime of the hosted worker
+        // 1. Every 5 seconds, it reconciles the active parent folder watchers with the folders currently configured in the database
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+        // stoppingToken: cancellation signal - you pass it into cancellable operations and check it in loops
+        // When the host stops, the token is cancelled and Task.Delay throws OperationCanceledException. That exits ExecuteAsync, which is normal for a BackgroundService.
         {
             _logger.LogInformation("FileSystemWatcherWorker starting up.");
+            _stoppingToken = stoppingToken;
 
-            // TODO: wtf is this
-            _state.Status = "Running";
-
-            while (!stoppingToken.IsCancellationRequested)
+            try
             {
-                await SyncWatchersFromDatabaseAsync();
-                await Task.Delay(5000, stoppingToken);
+                while (!stoppingToken.IsCancellationRequested)
+                {
+                    await SyncWatchersFromDatabaseAsync(stoppingToken);
+                    await Task.Delay(5000, stoppingToken);
+                }
             }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            {
+                _logger.LogInformation("FileSystemWatcherWorker stopping.");
+            }
+            finally
+            {
+                // Dispose of watchers when ExecuteAsync is paused
+                foreach (var watcher in _activeWatchers.Values)
+                {
+                    watcher.Dispose();
+                }
 
-            //foreach (var path in _state.ActiveWatchedPaths)
-            //{
-            //    AttachNewWatcher(path);
-
-            //}
+                _activeWatchers.Clear();
+            }
         }
 
-        private async Task SyncWatchersFromDatabaseAsync()
+        private async Task SyncWatchersFromDatabaseAsync(
+            CancellationToken stoppingToken
+        )
         {
             List<string?> configuredPaths;
 
@@ -78,19 +102,18 @@ namespace StorageStandby.Backend.Workers
             {
                 // scope factory creates a new scope for dependency injection, allowing us to safely resolve services like AppDbContext without risking memory leaks or conflicts with other parts of the application
                 var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-                
+
                 // Read active paths from SQLite
                 configuredPaths = await db.WatchedFolders
                     .Select(f => f.LocalPath)
-                    .ToListAsync();
+                    .ToListAsync(stoppingToken);
             }
-
-            // TODO: refer to WatchedFolderParent InitializeWatchedChildren()
 
             // 1. Attach watchers for newly added database paths
             foreach (var path in configuredPaths)
             {
-                if (!_activeWatchers.ContainsKey(path) && Directory.Exists(path))
+                stoppingToken.ThrowIfCancellationRequested();
+                if (!string.IsNullOrEmpty(path) && !_activeWatchers.ContainsKey(path) && Directory.Exists(path))
                 {
                     AttachWatcher(path);
                 }
@@ -101,16 +124,12 @@ namespace StorageStandby.Backend.Workers
             {
                 if (!configuredPaths.Contains(existingPath))
                 {
-                    if (_activeWatchers.TryRemove(existingPath, out var watcher))
-                    {
-                        watcher.Dispose();
-                        _logger.LogInformation($"Detached watcher from: {existingPath}");
-                    }
+                    DetachWorker(existingPath);
                 }
             }
         }
 
-        private void AttachWatcher(string folderPath) 
+        private void AttachWatcher(string folderPath)
         {
             try
             {
@@ -119,26 +138,47 @@ namespace StorageStandby.Backend.Workers
                 var watcher = new FileSystemWatcher(folderPath)
                 {
                     IncludeSubdirectories = true,
-                    NotifyFilter = NotifyFilters.FileName 
-                        | NotifyFilters.DirectoryName 
-                        | NotifyFilters.LastWrite 
+                    NotifyFilter = NotifyFilters.FileName
+                        | NotifyFilters.DirectoryName
+                        | NotifyFilters.LastWrite
                         | NotifyFilters.Size,
                 };
+
+                if (!_activeWatchers.TryAdd(folderPath, watcher))
+                {
+                    watcher.Dispose();
+                    return;
+                }
 
                 watcher.Changed += OnFileSystemEvent;
                 watcher.Created += OnFileSystemEvent;
                 watcher.Deleted += OnFileSystemEvent; // external moves are a delete
-                watcher.Renamed += OnFileRenamed; // internal moves within the same overarching directory are treated as a rename
+                watcher.Renamed += OnFileRenamedEvent; // internal moves within the same overarching directory are treated as a rename
 
                 watcher.EnableRaisingEvents = true;
 
-                if (_activeWatchers.TryAdd(folderPath, watcher))
+                _logger.LogInformation($"Started FileSystemWatcher on: {folderPath}");
+
+                // tracking folders and files in memory
+                _trackedFolders.TryAdd(folderPath, true);
+                var children = _fileSystem.GetChildren(folderPath);
+                if (children is not null)
                 {
-                    _logger.LogInformation($"Started FileSystemWatcher on: {folderPath}");
+                    foreach (var folder in children.Folders)
+                    {
+                        _trackedFolders.TryAdd(folder, true);
+                    }
                 }
-            } catch (Exception ex)
+
+            }
+            catch (Exception ex)
             {
                 _logger.LogError(ex, $"Failed to attach watcher to: {folderPath}");
+
+                if (_activeWatchers.TryRemove(folderPath, out var watcher))
+                {
+                    watcher.Dispose();
+                }
             }
         }
 
@@ -152,34 +192,59 @@ namespace StorageStandby.Backend.Workers
             }
         }
 
+        // Event types: changed, created, deleted
         private void OnFileSystemEvent(object sender, FileSystemEventArgs e)
         {
             // checks if this is a duplicate event for the same file path within a short time frame (debouncing)
             if (IsDebounced(e.FullPath)) return;
-            _ = ProcessChangedFileAsync(e.FullPath, e.ChangeType.ToString());
+
+            if (_trackedFolders.TryGetValue(e.FullPath, out _) || Directory.Exists(e.FullPath))
+            {
+                _ = ProcessChangedFolderAsync(e.FullPath, e.ChangeType.ToString(), stoppingToken: _stoppingToken);
+            }
+            else
+            {
+                _ = ProcessChangedFileAsync(e.FullPath, e.ChangeType.ToString(), stoppingToken: _stoppingToken);
+            }
         }
 
-        private void OnFileRenamed(object sender, RenamedEventArgs e)
+        private void OnFileRenamedEvent(object sender, RenamedEventArgs e)
         {
             if (IsDebounced(e.FullPath)) return;
 
             _logger.LogInformation("File renamed: {OldPath} -> {NewPath}", e.OldFullPath, e.FullPath);
 
+            bool isFile = File.Exists(e.FullPath);
             bool isDirectory = Directory.Exists(e.FullPath);
-            // file rename
-            if (!isDirectory && e.ChangeType != WatcherChangeTypes.Deleted)
+            // 1. file rename/move
+            if (isFile)
             {
-                _ = ProcessChangedFileAsync(e.FullPath, "Renamed", e.OldFullPath);
-            } 
-            // directory deleted
-            else if (!isDirectory) {
-                // TODO: add error-checking in sync to recheck stuff
-                _ = ProcessChangedFolderAsync(e.FullPath, "Deleted", e.OldFullPath);
+                _ = ProcessChangedFileAsync(e.FullPath, "Renamed", e.OldFullPath, _stoppingToken);
             }
-            // directory renamed
+            // 2. directory rename/move
+            else if (isDirectory)
+            {
+                _ = ProcessChangedFolderAsync(e.FullPath, "Renamed", e.OldFullPath, _stoppingToken);
+                // update directory tracking
+                if (_trackedFolders.TryGetValue(e.OldFullPath, out _))
+                {
+                    _trackedFolders.TryRemove(e.OldFullPath, out _);
+                    _trackedFolders.TryAdd(e.FullPath, true);
+                }
+            }
+            // 3. item renamed/moved completely outside of monitored scope 
             else
             {
-                _ = ProcessChangedFolderAsync(e.FullPath, "Renamed", e.OldFullPath);
+                _logger.LogWarning("Renamed target item no longer exists locally. It was likely moved outside the watched directory.");
+
+                if (_trackedFolders.TryGetValue(e.OldFullPath, out bool found) && found)
+                {
+                    _ = ProcessChangedFolderAsync(e.FullPath, "Deleted", e.OldFullPath, _stoppingToken); // the tracked path was a folder
+                }
+                else
+                {
+                    _ = ProcessChangedFileAsync(e.FullPath, "Deleted", e.OldFullPath, _stoppingToken);
+                }
             }
         }
 
@@ -200,14 +265,23 @@ namespace StorageStandby.Backend.Workers
 
 
         // TODO: rewrite/refactor
-        private async Task ProcessChangedFolderAsync(string folderPath, string changeType, string? oldFolderPath = null)
+        private async Task ProcessChangedFolderAsync(
+            string folderPath,
+            string changeType,
+            string? oldFolderPath = null,
+            CancellationToken stoppingToken = default)
         {
             // skip processing files
-            if (File.Exists(folderPath)) ProcessChangedFileAsync(folderPath, changeType, oldFolderPath);
+            if (File.Exists(folderPath))
+            {
+                await ProcessChangedFileAsync(folderPath, changeType, oldFolderPath, stoppingToken);
+                return;
+            }
 
             if (changeType == "Deleted")
             {
-            } else
+            }
+            else
             {
                 // TODO: idfk if WaitForFileUnlockAsync works for folders
                 //bool unlocked = await WaitForFileUnlockAsync(folderPath, maxTimeoutMs: 5000);
@@ -222,7 +296,8 @@ namespace StorageStandby.Backend.Workers
                 {
                     // differentiate between actual renames and moves
 
-                } else if (changeType == "Created")
+                }
+                else if (changeType == "Created")
                 {
 
                 }
@@ -233,42 +308,46 @@ namespace StorageStandby.Backend.Workers
             }
 
             // Create short-lived DB scope to save sync staging state
-            //using var scope = _scopeFactory.CreateScope();
-            //var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-            //var existingRecord = await db.FileSyncRecords
-            //    .FirstOrDefaultAsync(f => f.WatchedFolderId == folder.Id && f.LocalPath == folderPath);
-            //if (existingRecord == null)
-            //{
-            //    db.FileSyncRecords.Add(new FileSyncRecord
-            //    {
-            //        WatchedFolderId = folder.Id,
-            //        LocalPath = folderPath,
-            //        CloudId = null,
-            //        FileHash = string.Empty,
-            //        LastModifiedLocal = Directory.Exists(folderPath) ? Directory.GetLastWriteTimeUtc(folderPath) : DateTime.UtcNow,
-            //        LastSyncedToCloud = DateTime.MinValue // Flags for upload
-            //    });
-            //}
-            //else
-            //{
-            //    existingRecord.LastModifiedLocal = Directory.Exists(folderPath) ? Directory.GetLastWriteTimeUtc(folderPath) : DateTime.UtcNow;
-            //}
-            //await db.SaveChangesAsync();
-            //_logger.LogInformation("Staged [{ChangeType}] for folder: {Path}", changeType, folderPath);
+            using var scope = _scopeFactory.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var existingRecord = await db.FileSyncRecords
+               .FirstOrDefaultAsync(f => f.WatchedFolderId == folder.Id && f.LocalPath == folderPath);
+            if (existingRecord == null)
+            {
+                db.FileSyncRecords.Add(new FileSyncRecord
+                {
+                    WatchedFolderId = folder.Id,
+                    LocalPath = folderPath,
+                    CloudId = null,
+                    FileHash = string.Empty,
+                    LastModifiedLocal = Directory.Exists(folderPath) ? Directory.GetLastWriteTimeUtc(folderPath) : DateTime.UtcNow,
+                    LastSyncedToCloud = DateTime.MinValue // Flags for upload
+                });
+            }
+            else
+            {
+                existingRecord.LastModifiedLocal = Directory.Exists(folderPath) ? Directory.GetLastWriteTimeUtc(folderPath) : DateTime.UtcNow;
+            }
+            await db.SaveChangesAsync();
+            _logger.LogInformation("Staged [{ChangeType}] for folder: {Path}", changeType, folderPath);
         }
 
-        private async Task ProcessChangedFileAsync(string filePath, string changeType, string? oldFilePath = null)
+        private async Task ProcessChangedFileAsync(
+            string filePath,
+            string changeType,
+            string? oldFilePath = null,
+            CancellationToken stoppingToken = default)
         {
             // skip processing directories
-            if (Directory.Exists(filePath)) 
-            { 
+            if (Directory.Exists(filePath))
+            {
                 _ = ProcessChangedFolderAsync(filePath, changeType, oldFilePath);
                 return;
             }
 
             if (changeType != "Deleted")
             {
-                bool unlocked = await WaitForFileUnlockAsync(filePath, maxTimeoutMs: 5000);
+                bool unlocked = await WaitForFileUnlockAsync(filePath, maxTimeoutMs: 5000, stoppingToken);
                 // Ensure file isn't currently locked by a process (e.g. Word, Photoshop)
                 if (!unlocked)
                 {
@@ -281,12 +360,26 @@ namespace StorageStandby.Backend.Workers
             {
                 // TODO: handle MOVES which count as file renames
                 // differentiate between moves and renames
-            } 
+
+                string oldDirectory = Path.GetDirectoryName(oldFilePath);
+                string newDirectory = Path.GetDirectoryName(filePath);
+
+                bool isSameDirectory = string.Equals(oldDirectory, newDirectory, StringComparison.OrdinalIgnoreCase);
+
+                if (isSameDirectory)
+                {
+                    // rename
+                }
+                else
+                {
+                    // move
+                }
+            }
 
             // -----------------------------------------------------------
             // Sync/Object Updates
 
-            // Create short-lived DB scope to save sync staging state
+            // Create short-lived DB scope to save sync staging state  
             // using var scope = _scopeFactory.CreateScope();
             // var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
@@ -316,13 +409,17 @@ namespace StorageStandby.Backend.Workers
             // TODO: Push record into SQLite PendingSyncQueue
         }
 
-        private async Task<bool> WaitForFileUnlockAsync(string filePath, int maxTimeoutMs)
+        private async Task<bool> WaitForFileUnlockAsync(
+            string filePath,
+            int maxTimeoutMs,
+            CancellationToken stoppingToken)
         {
             int elapsed = 0;
             int delay = 250;
 
             while (elapsed < maxTimeoutMs)
             {
+                stoppingToken.ThrowIfCancellationRequested();
                 try
                 {
                     if (!File.Exists(filePath)) return true; // File deleted before read
@@ -347,12 +444,14 @@ namespace StorageStandby.Backend.Workers
         public override void Dispose()
         {
             // Clean up memory when the Windows Service stops
-            foreach (var watcher in _activeWatchers)
+            foreach (var watcher in _activeWatchers.Values)
             {
-                //watcher.Dispose();
+                watcher.Dispose();
             }
+            _activeWatchers.Clear();
             // TODO: wtf is this
             _state.OnNewFolderAdded -= AttachWatcher;
+
             base.Dispose();
         }
     }

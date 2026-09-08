@@ -33,8 +33,8 @@ namespace StorageStandby.Backend.Models
 
         // ----------------------------------------------------------
         // Sync Settings
-        public bool IndefiniteSync { get; set; } = false;
-        public DateTime? PauseSyncUntil { get; set; } = null; // starts up and checks this value
+        public bool IsSyncPaused { get; set; } = false;
+        public DateTime? PauseSyncUntil { get; set; } = null; // null: indefinite pause; otherwise, resume after this time
         public List<SyncEvent> SyncEvents { get; set; } = new List<SyncEvent> { }; // might not be all... ?
 
         public SyncFrequency SyncFrequency { get; set; } = new SyncFrequency();
