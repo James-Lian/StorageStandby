@@ -83,7 +83,6 @@
         public string LocalPath { get; set; } = string.Empty;
         // validity checks cause file could be changed/deleted
         public string CloudId { get; set; } = string.Empty;
-        public string? FileHash { get; set; } = string.Empty;
 
         public DateTime LastModifiedLocal { get; set; }
         public DateTime LastSyncedToCloud { get; set; }

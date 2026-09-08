@@ -2,8 +2,7 @@ namespace StorageStandby.Backend.Core
 {
     public class SyncManager
     {
-        
-
+    
         public void CreateWatchedFolder()
         {
             

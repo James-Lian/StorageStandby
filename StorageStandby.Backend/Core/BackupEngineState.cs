@@ -6,14 +6,54 @@ using System.Diagnostics;
 using System.Linq; 
 using System.Net.NetworkInformation;
 using StorageStandby.Backend.Models;
+using StorageStandby.Backend.Data;
 
 namespace StorageStandby.Backend.Core
 {
-    public class BackupEngineState
+    public class BackupEngineState (
+        AppDbContext _db
+    )
     {
         // *** high level state ***
         public string Status { get; set; } = "Initializing";
-        public bool IsPaused { get; set; } = false;
+        private bool _isSyncPaused { get; set; } = false;
+        private DateTime? _pauseSyncUntil { get; set; } = null;
+        private readonly object _IsSyncPausedLock = new object();
+        public void LoadSyncPauseFromDb()
+        {
+            var settings = _db.SystemSettings.FirstOrDefault();
+            if (settings != null)
+            {
+                _isSyncPaused = settings.IsSyncPaused;
+                _pauseSyncUntil = settings.PauseSyncUntil;
+            }
+        }
+        public void SetSyncPause(bool isPaused, DateTime? pauseUntil = null)
+        {
+            lock (_IsSyncPausedLock)
+            {
+                _isSyncPaused = isPaused;
+                _pauseSyncUntil = pauseUntil;
+                
+                // Updates database too
+                var systemSettings = _db.SystemSettings.FirstOrDefault();
+                if (systemSettings != null)
+                {
+                    systemSettings.IsSyncPaused = isPaused;
+                    systemSettings.PauseSyncUntil = pauseUntil;
+                    _db.SaveChanges();
+                }
+            }
+        }
+        public bool GetSyncPause()
+        {
+            // Check if pause period has expired
+            if (_pauseSyncUntil.HasValue && DateTime.Now < _pauseSyncUntil.Value)
+            {
+                return true;
+            }
+            return _isSyncPaused;
+        }
 
         // *** transient UI state (dashboard instruments) ***
         //public Dictionary<Providers, ConnectionStatus> ConnectionStatuses = new() {
@@ -54,7 +94,7 @@ namespace StorageStandby.Backend.Core
 
         public bool IsSafeToSync()
         {
-            if (IsPaused || IsOnMeteredConnection() || IsHeavyProcessRunning())
+            if (_isSyncPaused || IsOnMeteredConnection() || IsHeavyProcessRunning())
             {
                 return false;
             }

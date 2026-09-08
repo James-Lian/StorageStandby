@@ -1,10 +1,12 @@
-import React, { useEffect, useState, type Provider } from "react"
+import React, { useEffect, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Pause, Play, RefreshCw, ShieldAlert, Zap } from "lucide-react"
+import { Checkbox } from "@/components/ui/checkbox"
+import { cn } from "@/lib/utils"
+import { Pause, Play, RefreshCw, ShieldAlert, X, Zap } from "lucide-react"
 import { PROVIDERS, type Providers } from "@/types/providers"
 import { IgnoreRulesDialog } from "@/components/ignore-rules-dialog"
 
@@ -12,6 +14,7 @@ import { IgnoreRulesDialog } from "@/components/ignore-rules-dialog"
 import { fetchAllWatchedFolders, fetchWatchedFolder } from "@/api/data"
 
 export function Sync() {
+
     // Feature: sync scheduling option (automatic or manual)
     // see what's in sync queue
 
@@ -19,13 +22,18 @@ export function Sync() {
     // Sync: active governance and settings
 
     const [isPaused, setIsPaused] = useState(false)
-    const [preferredProvider, setPreferredProvider] = useState<string>("auto")
+    const [preferredProvider, setPreferredProvider] = useState<string>("none")
     const [ignoreRules, setIgnoreRules] = useState<string>("*.tmp;node_modules/;.git/")
     const [isIgnoreRulesDialogOpen, setIsIgnoreRulesDialogOpen] = useState(false)
 
     const [providerDestinationByFolder, setProviderDestinationByFolder] = React.useState<Record<string, [Providers, string]>>({
         "example": [PROVIDERS.Google, "accountid"]
     });
+
+    const [selectedRows, setSelectedRows] = useState<string[]>([])
+    const [queueRows, setQueueRows] = useState([
+        { id: "projects", folder: "C:/Users/james/Projects", priority: "Critical", nextSync: "Daily" },
+    ])
 
     useEffect(() => {
 
@@ -41,17 +49,63 @@ export function Sync() {
                         Manage engine state, active queues, global routing, and path ignore patterns.
                     </p>
                 </div>
-                <div className="flex items-center gap-2">
+                <Badge variant={isPaused ? "destructive" : "default"}>
+                    {isPaused ? "Engine Paused" : "Engine Running"}
+                </Badge>
+            </div>
+
+            {/* Engine Control Bar */}
+            <div
+                className={cn(
+                    "flex flex-col gap-4 rounded-2xl border p-4 md:flex-row md:items-center md:justify-between",
+                    isPaused ? "border-amber-500/40 bg-amber-500/10" : "border-emerald-500/40 bg-emerald-500/10"
+                )}
+            >
+                <div className="flex items-center gap-3">
+                    <div
+                        className={cn(
+                            "flex size-10 shrink-0 items-center justify-center rounded-xl",
+                            isPaused ? "bg-amber-500/20 text-amber-600" : "bg-emerald-500/20 text-emerald-600"
+                        )}
+                    >
+                        {isPaused ? <Pause className="size-5" /> : <Play className="size-5" />}
+                    </div>
+                    <div>
+                        <div className="flex items-center gap-2">
+                            <h2 className="text-lg font-semibold">Engine Controls</h2>
+                            <Badge variant={isPaused ? "destructive" : "default"}>
+                                {isPaused ? "Paused" : "Running"}
+                            </Badge>
+                        </div>
+                        <p className="text-sm text-muted-foreground">
+                            {isPaused
+                                ? "Engine is paused. Resume to continue scheduled sync operations."
+                                : "Engine is running. Changes apply to pending sync operations."}
+                        </p>
+                    </div>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
                     {isPaused ? (
-                        <Button variant="default" onClick={() => setIsPaused(false)}>
+                        <Button
+                            size="lg"
+                            className="bg-emerald-600 text-white shadow-md hover:bg-emerald-700"
+                            onClick={() => setIsPaused(false)}
+                        >
                             <Play className="mr-2 size-4" /> Resume Sync
                         </Button>
                     ) : (
-                        <Button variant="outline" onClick={() => setIsPaused(true)}>
+                        <Button
+                            size="lg"
+                            className="bg-amber-500 text-white shadow-md hover:bg-amber-600"
+                            onClick={() => setIsPaused(true)}
+                        >
                             <Pause className="mr-2 size-4" /> Pause Engine
                         </Button>
                     )}
-                    <Button variant="secondary">
+                    <Button
+                        size="lg"
+                        className="bg-sky-600 text-white shadow-md hover:bg-sky-700"
+                    >
                         <RefreshCw className="mr-2 size-4" /> Sync All Now
                     </Button>
                 </div>
@@ -72,7 +126,7 @@ export function Sync() {
                             <SelectValue placeholder="Select Provider" />
                         </SelectTrigger>
                         <SelectContent>
-                            <SelectItem value="auto">Auto (Storage Optimized)</SelectItem>
+                            <SelectItem value="none">None (auto storage-optimization)</SelectItem>
                             <SelectItem value="google">Google Drive</SelectItem>
                             <SelectItem value="microsoft">OneDrive</SelectItem>
                             <SelectItem value="dropbox">Dropbox</SelectItem>
@@ -119,35 +173,75 @@ export function Sync() {
                 <Table>
                     <TableHeader>
                         <TableRow>
+                            <TableHead className="w-12">
+                                <Checkbox
+                                    checked={queueRows.length > 0 && selectedRows.length === queueRows.length}
+                                    onCheckedChange={() => {
+                                        if (selectedRows.length === queueRows.length) {
+                                            setSelectedRows([])
+                                        } else {
+                                            setSelectedRows(queueRows.map((row) => row.id))
+                                        }
+                                    }}
+                                    aria-label="Select all rows"
+                                />
+                            </TableHead>
                             <TableHead>Folder Path</TableHead>
                             <TableHead>Priority</TableHead>
                             <TableHead>Target Cloud</TableHead>
                             <TableHead>Next Sync</TableHead>
                             <TableHead className="text-right">Actions</TableHead>
+                            <TableHead className="w-12"></TableHead>
                         </TableRow>
                     </TableHeader>
                     <TableBody>
-                        <TableRow>
-                            <TableCell className="font-medium">C:/Users/james/Projects</TableCell>
-                            <TableCell><Badge variant="default">Critical</Badge></TableCell>
+                        {queueRows.map((row) => (
+                        <TableRow key={row.id} className={cn(selectedRows.includes(row.id) && "bg-muted")}>
                             <TableCell>
-                                <Select value={"auto"}>
+                                <Checkbox
+                                    checked={selectedRows.includes(row.id)}
+                                    onCheckedChange={() => {
+                                        setSelectedRows((prev) =>
+                                            prev.includes(row.id)
+                                                ? prev.filter((id) => id !== row.id)
+                                                : [...prev, row.id]
+                                        )
+                                    }}
+                                    aria-label={`Select ${row.folder}`}
+                                />
+                            </TableCell>
+                            <TableCell className="font-medium">{row.folder}</TableCell>
+                            <TableCell><Badge variant="default">{row.priority}</Badge></TableCell>
+                            <TableCell>
+                                <Select value={"none"}>
                                     <SelectTrigger>
                                         <SelectValue placeholder="Select Provider" />
                                     </SelectTrigger>
                                     <SelectContent>
-                                        <SelectItem value="auto">Auto</SelectItem>
+                                        <SelectItem value="none">None (auto storage-optimization)</SelectItem>
                                         <SelectItem value="google">Google Drive</SelectItem>
                                         <SelectItem value="microsoft">OneDrive</SelectItem>
                                         <SelectItem value="dropbox">Dropbox</SelectItem>
                                     </SelectContent>
                                 </Select>
                             </TableCell>
-                            <TableCell>Daily</TableCell>
+                            <TableCell>{row.nextSync}</TableCell>
                             <TableCell className="text-right">
                                 <Button variant="ghost" size="sm">Sync Now</Button>
                             </TableCell>
+                            <TableCell className="text-right">
+                                <Button
+                                    variant="ghost"
+                                    size="icon-sm"
+                                    aria-label={`Remove ${row.folder}`}
+                                    className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+                                    onClick={() => setQueueRows((prev) => prev.filter((r) => r.id !== row.id))}
+                                >
+                                    <X className="size-4" />
+                                </Button>
+                            </TableCell>
                         </TableRow>
+                        ))}
                     </TableBody>
                 </Table>
             </div>

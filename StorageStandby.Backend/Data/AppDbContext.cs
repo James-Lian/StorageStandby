@@ -11,6 +11,9 @@ namespace StorageStandby.Backend.Data
         public DbSet<CloudToken> CloudTokens { get; set; }
         public DbSet<SystemSettings> SystemSettings { get; set; }
 
+        // Yo reconsider this portion:
+        public DbSet<FileSyncRecord> FileSyncRecords { get; set; }
+
         // The constructor passes configuration options (like the file path) to the base EF Core engine
         public AppDbContext(DbContextOptions<AppDbContext> options) : base(options)
         {
