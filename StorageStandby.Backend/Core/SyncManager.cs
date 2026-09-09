@@ -5,14 +5,11 @@ namespace StorageStandby.Backend.Core
 {
     public class SyncManager
     {
-        IServiceScopeFactory _scopeFactory;
-        AppDbContext _db;
+        readonly IServiceScopeFactory _scopeFactory;
         public SyncManager (
-            IServiceScopeFactory scopeFactory,
-            AppDbContext db
+            IServiceScopeFactory scopeFactory
         ) {
             _scopeFactory = scopeFactory;
-            _db = db;
         }
     
         // ----------------------------------------------------------------------------------------------------
@@ -32,45 +29,6 @@ namespace StorageStandby.Backend.Core
         public void DeleteWatchedFolder()
         {
             
-        }
-
-        public long? GetWatchedFolderIdFromPath(string path) {
-            using var scope = _scopeFactory.CreateScope();
-            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-
-            var folder = db.WatchedFolders.FirstOrDefault(f => f.LocalPath == path);
-            if (folder is not null)
-            {
-                return folder.Id;
-            }
-            return null;
-        }
-
-        public string? GetWatchedFolderPathFromId(long id)
-        {
-            using var scope = _scopeFactory.CreateScope();
-            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-
-            var folder = db.WatchedFolders.FirstOrDefault(f => f.Id == id);
-            if (folder is not null)
-            {
-                return folder.LocalPath;
-            }
-            return null;
-        }
-
-        public WatchedFolder GetWatchedFolderFromId(long id)
-        {
-            using var scope = _scopeFactory.CreateScope();
-            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-
-            var folder = db.WatchedFolders.FirstOrDefault(f => f.Id == id);
-            if (folder is not null)
-            {
-                return folder;
-            }
-            return null;
-
         }
 
         // ----------------------------------------------------------------------------------------------------

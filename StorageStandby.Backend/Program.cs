@@ -14,7 +14,6 @@ using StorageStandby.Backend.Services;
 using StorageStandby.Backend.Workers;
 using System.Linq;
 
-
 // Backend ASP.NET Core C# project
 // Uses built-in web server (Kestrel) to listen to a local pipe instead of an open network port
 
@@ -34,6 +33,7 @@ builder.Services.AddSingleton<BackupEngineState>();
 builder.Services.AddSingleton<TokenManager>();
 builder.Services.AddSingleton<LocalFileSystemService>();
 builder.Services.AddSingleton<SyncManager>();
+builder.Services.AddSingleton<WatchedFolderService>();
 // .NET automatically registers IServiceScopeFactory as a Singleton infrastructure service behind the scenes as soon as the service collection is created -- no need to declare!
 builder.Services.AddDbContext<AppDbContext>(options =>
 {
@@ -250,6 +250,32 @@ app.MapGet("/api/folders/{localPath}", async (
         return Results.NotFound(new { Message = "Folder not found." });
     }
     return Results.Ok(folder);
+});
+
+// public record IgnoreRulesChangeRequest(string OldIgnoreRules, string NewIgnoreRules);
+app.MapPost("/api/folders/{watchedFolderId:long}/ignore-rules/reconcile", async (
+    long watchedFolderId,
+    // IgnoreRulesChangeRequest request,
+    FileSystemWatcherWorker watcherWorker,
+    AppDbContext db,
+    CancellationToken cancellationToken) =>
+{
+    var folder = await db.WatchedFolders.FindAsync([watchedFolderId], cancellationToken);
+    if (folder is null)
+    {
+        return Results.NotFound(new { Message = "Folder not found." });
+    }
+
+    await watcherWorker.ReconcileIgnoreRulesAsync(
+        watchedFolderId,
+        request.OldIgnoreRules,
+        request.NewIgnoreRules,
+        cancellationToken);
+
+    folder.IgnoreRules = request.NewIgnoreRules;
+    await db.SaveChangesAsync(cancellationToken);
+
+    return Results.Ok(new { Message = "Ignore rules reconciled successfully." });
 });
 
 // -------------------------------------------------------------------
