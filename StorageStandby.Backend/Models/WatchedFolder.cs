@@ -25,6 +25,7 @@
     }
 
     // only the roots are selected by the user + ignore rules
+    // TODO: FileSystemWatcher events don't fire for root folder renames OR deletions (need to watch IT'S parent instead)
     public class WatchedFolder
     {
         public long Id { get; set; }
@@ -67,6 +68,15 @@
         public WatchedFolder WatchedFolder { get; set; }
         // maybe: saving a config file in the cloud as well??
         public string ConfigFileId { get; set; }
+    }
+
+    public enum FileSyncAction
+    {
+        Created,
+        Deleted,
+        Renamed,
+        Changed,
+        Moved
     }
 
     public class FileSyncRecord
