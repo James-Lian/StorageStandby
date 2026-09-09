@@ -75,7 +75,7 @@ namespace StorageStandby.Backend.Services
             public List<string> Folders { get; set; } = new();
         }
 
-        public FileFolders? GetChildren(string path) {
+        public FileFolders? GetAllNestedChildren(string path) {
             if (Directory.Exists(path)) {
                 List<string> files = Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories).ToList();
                 List<string> folders = Directory.EnumerateDirectories(path, "*", SearchOption.AllDirectories).ToList();

@@ -29,7 +29,7 @@ namespace StorageStandby.Backend.Models
 
         // ----------------------------------------------------------
         // Local Settings
-        public string GlobalIgnoreRules { get; set; } = "*.tmp;node_modules/"; // semicolon-delimited
+        public string GlobalIgnoreRules { get; set; } = "*C:/"; // semicolon-delimited
 
         // ----------------------------------------------------------
         // Sync Settings

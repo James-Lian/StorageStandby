@@ -71,7 +71,7 @@ public class TokenManager
         string? email=null,
         string? name=null)
     {
-        using var scope = _scopeFactory.CreateScope();
+        await using var scope = _scopeFactory.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
         var existing = await db.CloudTokens.FirstOrDefaultAsync(t => t.ProviderName == provider && t.AccountId == accountId);
@@ -109,7 +109,7 @@ public class TokenManager
 
     public async Task<CloudToken?> GetRefreshTokenAsync(Providers provider, string accountId)
     {
-        using var scope = _scopeFactory.CreateScope();
+        await using var scope = _scopeFactory.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
         // Generates a SQL query: SELECT * FROM CloudTokens WHERE ProviderName = 'Google' LIMIT 1
@@ -124,7 +124,7 @@ public class TokenManager
     public async Task FlagRefreshTokenAsExpiredAsync(Providers providerName, string accountId)
     {
         // 1. Fetch the token from the database
-        using var scope = _scopeFactory.CreateScope();
+        await using var scope = _scopeFactory.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
         var token = await db.CloudTokens.FirstOrDefaultAsync(t => t.ProviderName == providerName && t.AccountId == accountId);
@@ -142,7 +142,7 @@ public class TokenManager
 
     public async Task DeleteRefreshTokenAsync(Providers provider, string accountId)
     {
-        using var scope = _scopeFactory.CreateScope();
+        await using var scope = _scopeFactory.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
         var token = await db.CloudTokens.FirstOrDefaultAsync(t => t.ProviderName == provider && t.AccountId == accountId);
@@ -171,7 +171,7 @@ public class TokenManager
         }
 
         // 2. Otherwise, fetch and decrypt the Refresh Token from SQLite
-        using var scope = _scopeFactory.CreateScope();
+        await using var scope = _scopeFactory.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
         var tokenRecord = await db.CloudTokens.FirstOrDefaultAsync(t => t.ProviderName == provider && t.AccountId == accountId);
