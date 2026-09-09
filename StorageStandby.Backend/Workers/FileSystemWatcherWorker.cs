@@ -33,7 +33,7 @@ namespace StorageStandby.Backend.Workers
         // thread-safe, key-value dictionary stored directly in your server's RAM
         // updating/saving a file can trigger multiple events in quick succession, so we use this cache to "debounce" the events and avoid redundant uploads
         private readonly LocalFileSystemService _fileSystem;
-        private readonly SyncManager _syncManager;
+        private readonly WatchedFolderService _watchedFolderService;
         private CancellationToken _stoppingToken;
 
         private readonly ConcurrentDictionary<long, FileSystemWatcher> _activeWatchers = new(); // WatchedFolderId, FileSystemWatcher
@@ -46,14 +46,14 @@ namespace StorageStandby.Backend.Workers
             BackupEngineState state,
             IMemoryCache cache,
             LocalFileSystemService fileSystem,
-            SyncManager syncManager)
+            WatchedFolderService watchedFolderService)
         {
             _logger = logger;
             _scopeFactory = scopeFactory;
             _state = state;
             _cache = cache;
             _fileSystem = fileSystem;
-            _syncManager = syncManager;
+            _watchedFolderService = watchedFolderService;
 
             // TODO: wtf is this
             _state.OnNewFolderAdded += AttachWatcher;
@@ -116,7 +116,7 @@ namespace StorageStandby.Backend.Workers
             foreach (var id in configuredFolders)
             {
 
-                WatchedFolder folder = _syncManager.GetWatchedFolderFromId(id);
+                WatchedFolder folder = _watchedFolderService.GetWatchedFolderFromId(id);
                 if (folder is null)
                 {
                     _logger.LogWarning("Watched folder id invalid (no folder exists): {Id}", id);
@@ -140,7 +140,7 @@ namespace StorageStandby.Backend.Workers
             {
                 if (!configuredFolders.Contains(existingId))
                 {
-                    DetachWorker(_syncManager.GetWatchedFolderFromId(existingId));
+                    DetachWorker(_watchedFolderService.GetWatchedFolderFromId(existingId));
                 }
             }
         }
@@ -220,6 +220,8 @@ namespace StorageStandby.Backend.Workers
         {
             // checks if this is a duplicate event for the same file path within a short time frame (debouncing)
             if (IsDebounced(e.FullPath)) return;
+            // check if the changed file matches the ignore rules glob
+            if (_fileSystem.IsFileIgnored(_watchedFolderService.GetWatchedFolderFromId(watchedFolderId).IgnoreRules, e.FullPath)) return;
 
             if (_trackedFolders.TryGetValue(e.FullPath, out _) || Directory.Exists(e.FullPath))
             {
@@ -237,6 +239,7 @@ namespace StorageStandby.Backend.Workers
             RenamedEventArgs e)
         {
             if (IsDebounced(e.FullPath)) return;
+            if (_fileSystem.IsFileIgnored(_watchedFolderService.GetWatchedFolderFromId(watchedFolderId).IgnoreRules, e.FullPath)) return;
 
             _logger.LogInformation("File renamed: {OldPath} -> {NewPath}", e.OldFullPath, e.FullPath);
 
