@@ -33,9 +33,10 @@ namespace StorageStandby.Backend.Workers
         // thread-safe, key-value dictionary stored directly in your server's RAM
         // updating/saving a file can trigger multiple events in quick succession, so we use this cache to "debounce" the events and avoid redundant uploads
         private readonly LocalFileSystemService _fileSystem;
+        private readonly SyncManager _syncManager;
         private CancellationToken _stoppingToken;
 
-        private readonly ConcurrentDictionary<string, FileSystemWatcher> _activeWatchers = new();
+        private readonly ConcurrentDictionary<long, FileSystemWatcher> _activeWatchers = new(); // WatchedFolderId, FileSystemWatcher
         private readonly ConcurrentDictionary<string, bool> _trackedFolders = new(); // true is folder, false is file 
 
         // ASP.NET natively injects the state and a logger
@@ -44,13 +45,15 @@ namespace StorageStandby.Backend.Workers
             IServiceScopeFactory scopeFactory,
             BackupEngineState state,
             IMemoryCache cache,
-            LocalFileSystemService fileSystem)
+            LocalFileSystemService fileSystem,
+            SyncManager syncManager)
         {
             _logger = logger;
             _scopeFactory = scopeFactory;
             _state = state;
             _cache = cache;
             _fileSystem = fileSystem;
+            _syncManager = syncManager;
 
             // TODO: wtf is this
             _state.OnNewFolderAdded += AttachWatcher;
@@ -95,7 +98,7 @@ namespace StorageStandby.Backend.Workers
             CancellationToken stoppingToken
         )
         {
-            List<string?> configuredPaths;
+            List<long> configuredFolders;
 
             // Rent a short-lived scope to safely query AppDbContext
             using (var scope = _scopeFactory.CreateScope())
@@ -104,38 +107,51 @@ namespace StorageStandby.Backend.Workers
                 var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
                 // Read active paths from SQLite
-                configuredPaths = await db.WatchedFolders
-                    .Select(f => f.LocalPath)
+                configuredFolders = await db.WatchedFolders
+                    .Select(f => f.Id)
                     .ToListAsync(stoppingToken);
             }
 
             // 1. Attach watchers for newly added database paths
-            foreach (var path in configuredPaths)
+            foreach (var id in configuredFolders)
             {
-                stoppingToken.ThrowIfCancellationRequested();
-                if (!string.IsNullOrEmpty(path) && !_activeWatchers.ContainsKey(path) && Directory.Exists(path))
+
+                WatchedFolder folder = _syncManager.GetWatchedFolderFromId(id);
+                if (folder is null)
                 {
-                    AttachWatcher(path);
+                    _logger.LogWarning("Watched folder id invalid (no folder exists): {Id}", id);
+                    continue;
+                }
+
+                stoppingToken.ThrowIfCancellationRequested();
+                // If the folder is not already watched, and it exists
+                if (!_activeWatchers.ContainsKey(id) && Directory.Exists(folder.LocalPath))
+                {
+                    AttachWatcher(folder);
+                }
+                else if (!Directory.Exists(folder.LocalPath))
+                {
+                    _logger.LogWarning("Watched folder path no longer exists: {Path}", folder.LocalPath);
                 }
             }
 
             // 2. Detach watchers for paths deleted from the database
-            foreach (var existingPath in _activeWatchers.Keys)
+            foreach (var existingId in _activeWatchers.Keys)
             {
-                if (!configuredPaths.Contains(existingPath))
+                if (!configuredFolders.Contains(existingId))
                 {
-                    DetachWorker(existingPath);
+                    DetachWorker(_syncManager.GetWatchedFolderFromId(existingId));
                 }
             }
         }
 
-        private void AttachWatcher(string folderPath)
+        private void AttachWatcher(WatchedFolder folder)
         {
             try
             {
                 // System.IO.FileSystemWatcher monitors specific directory and raises events when files/subdirectories are created, modified, renamed, or deleted
                 // more efficient than polling because it uses OS-level notifications
-                var watcher = new FileSystemWatcher(folderPath)
+                var watcher = new FileSystemWatcher(folder.LocalPath!)
                 {
                     IncludeSubdirectories = true,
                     NotifyFilter = NotifyFilters.FileName
@@ -144,71 +160,81 @@ namespace StorageStandby.Backend.Workers
                         | NotifyFilters.Size,
                 };
 
-                if (!_activeWatchers.TryAdd(folderPath, watcher))
+                if (!_activeWatchers.TryAdd(folder.Id, watcher))
                 {
                     watcher.Dispose();
                     return;
                 }
 
-                watcher.Changed += OnFileSystemEvent;
-                watcher.Created += OnFileSystemEvent;
-                watcher.Deleted += OnFileSystemEvent; // external moves are a delete
-                watcher.Renamed += OnFileRenamedEvent; // internal moves within the same overarching directory are treated as a rename
+                watcher.Changed += (sender, e) =>
+                    OnFileSystemEvent(folder.Id, folder.LocalPath!, e);
+                watcher.Created += (sender, e) =>
+                    OnFileSystemEvent(folder.Id, folder.LocalPath!, e);
+                watcher.Deleted += (sender, e) =>
+                    OnFileSystemEvent(folder.Id, folder.LocalPath!, e); // external moves are a delete
+                watcher.Renamed += (sender, e) =>
+                    OnFileRenamedEvent(folder.Id, folder.LocalPath!, e); // internal moves within the same overarching directory are treated as a rename
 
                 watcher.EnableRaisingEvents = true;
 
-                _logger.LogInformation($"Started FileSystemWatcher on: {folderPath}");
+                _logger.LogInformation($"Started FileSystemWatcher on: {folder.LocalPath}");
 
                 // tracking folders and files in memory
-                _trackedFolders.TryAdd(folderPath, true);
-                var children = _fileSystem.GetChildren(folderPath);
+                _trackedFolders.TryAdd(folder.LocalPath!, true);
+                var children = _fileSystem.GetAllNestedChildren(folder.LocalPath!);
                 if (children is not null)
                 {
-                    foreach (var folder in children.Folders)
+                    foreach (var childFolder in children.Folders)
                     {
-                        _trackedFolders.TryAdd(folder, true);
+                        _trackedFolders.TryAdd(childFolder, true);
                     }
                 }
 
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, $"Failed to attach watcher to: {folderPath}");
+                _logger.LogError(ex, $"Failed to attach watcher to: {folder.LocalPath}");
 
-                if (_activeWatchers.TryRemove(folderPath, out var watcher))
+                if (_activeWatchers.TryRemove(folder.Id, out var watcher))
                 {
                     watcher.Dispose();
                 }
             }
         }
 
-        private void DetachWorker(string folderPath)
+        private void DetachWorker(WatchedFolder folder)
         {
-            if (_activeWatchers.TryRemove(folderPath, out var watcher))
+            if (_activeWatchers.TryRemove(folder.Id, out var watcher))
             {
                 watcher.EnableRaisingEvents = false;
                 watcher.Dispose();
-                _logger.LogInformation($"Detached FileSystemWatcher from: {folderPath}");
+                _logger.LogInformation($"Detached FileSystemWatcher from: {folder.LocalPath}");
             }
         }
 
-        // Event types: changed, created, deleted
-        private void OnFileSystemEvent(object sender, FileSystemEventArgs e)
+        // Event types: changed, created, deleted (moves outside of the WatchedFolder parent can also be deleted events)
+        private void OnFileSystemEvent(
+            long watchedFolderId,
+            object sender,
+            FileSystemEventArgs e)
         {
             // checks if this is a duplicate event for the same file path within a short time frame (debouncing)
             if (IsDebounced(e.FullPath)) return;
 
             if (_trackedFolders.TryGetValue(e.FullPath, out _) || Directory.Exists(e.FullPath))
             {
-                _ = ProcessChangedFolderAsync(e.FullPath, e.ChangeType.ToString(), stoppingToken: _stoppingToken);
+                _ = ProcessChangedFolderAsync(watchedFolderId, e.FullPath, e.ChangeType.ToString(), stoppingToken: _stoppingToken);
             }
             else
             {
-                _ = ProcessChangedFileAsync(e.FullPath, e.ChangeType.ToString(), stoppingToken: _stoppingToken);
+                _ = ProcessChangedFileAsync(watchedFolderId, e.FullPath, e.ChangeType.ToString(), stoppingToken: _stoppingToken);
             }
         }
 
-        private void OnFileRenamedEvent(object sender, RenamedEventArgs e)
+        private void OnFileRenamedEvent(
+            long watchedFolderId,
+            object sender,
+            RenamedEventArgs e)
         {
             if (IsDebounced(e.FullPath)) return;
 
@@ -219,12 +245,12 @@ namespace StorageStandby.Backend.Workers
             // 1. file rename/move
             if (isFile)
             {
-                _ = ProcessChangedFileAsync(e.FullPath, "Renamed", e.OldFullPath, _stoppingToken);
+                _ = ProcessChangedFileAsync(watchedFolderId, e.FullPath, "Renamed", e.OldFullPath, _stoppingToken);
             }
             // 2. directory rename/move
             else if (isDirectory)
             {
-                _ = ProcessChangedFolderAsync(e.FullPath, "Renamed", e.OldFullPath, _stoppingToken);
+                _ = ProcessChangedFolderAsync(watchedFolderId, e.FullPath, "Renamed", e.OldFullPath, _stoppingToken);
                 // update directory tracking
                 if (_trackedFolders.TryGetValue(e.OldFullPath, out _))
                 {
@@ -232,18 +258,18 @@ namespace StorageStandby.Backend.Workers
                     _trackedFolders.TryAdd(e.FullPath, true);
                 }
             }
-            // 3. item renamed/moved completely outside of monitored scope 
+            // 3. If the renamed target is unavailable, record the old path as deleted
             else
             {
-                _logger.LogWarning("Renamed target item no longer exists locally. It was likely moved outside the watched directory.");
+                _logger.LogWarning("Renamed target is unavailable. Treating the old path as deleted: {Path}", e.OldFullPath);
 
                 if (_trackedFolders.TryGetValue(e.OldFullPath, out bool found) && found)
                 {
-                    _ = ProcessChangedFolderAsync(e.FullPath, "Deleted", e.OldFullPath, _stoppingToken); // the tracked path was a folder
+                    _ = ProcessChangedFolderAsync(watchedFolderId, e.OldFullPath, "Deleted", e.FullPath, _stoppingToken);
                 }
                 else
                 {
-                    _ = ProcessChangedFileAsync(e.FullPath, "Deleted", e.OldFullPath, _stoppingToken);
+                    _ = ProcessChangedFileAsync(watchedFolderId, e.OldFullPath, "Deleted", e.FullPath, _stoppingToken);
                 }
             }
         }
@@ -263,76 +289,53 @@ namespace StorageStandby.Backend.Workers
             return false;
         }
 
-
-        // TODO: rewrite/refactor
-        private async Task ProcessChangedFolderAsync(
-            string folderPath,
-            string changeType,
-            string? oldFolderPath = null,
-            CancellationToken stoppingToken = default)
+        private async Task SetDeletePendingSyncItem(
+            Func<PendingSyncItem, bool> searchConditions,
+            Action<PendingSyncItem> callback,
+            CancellationToken stoppingToken)
         {
-            // skip processing files
-            if (File.Exists(folderPath))
-            {
-                await ProcessChangedFileAsync(folderPath, changeType, oldFolderPath, stoppingToken);
-                return;
-            }
-
-            if (changeType == "Deleted")
-            {
-            }
-            else
-            {
-                // TODO: idfk if WaitForFileUnlockAsync works for folders
-                //bool unlocked = await WaitForFileUnlockAsync(folderPath, maxTimeoutMs: 5000);
-                //// Ensure folder isn't currently locked by a process (e.g. Word, Photoshop)
-                //if (!unlocked)
-                //{
-                //    _logger.LogWarning("Folder was locked by another process. Deferring: {Path}", folderPath);
-                //    return;
-                //}
-
-                if (changeType == "Renamed")
-                {
-                    // differentiate between actual renames and moves
-
-                }
-                else if (changeType == "Created")
-                {
-
-                }
-                else
-                {
-                    return;
-                }
-            }
-
-            // Create short-lived DB scope to save sync staging state
-            using var scope = _scopeFactory.CreateScope();
+            await using var scope = _scopeFactory.CreateAsyncScope();
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-            var existingRecord = await db.FileSyncRecords
-               .FirstOrDefaultAsync(f => f.WatchedFolderId == folder.Id && f.LocalPath == folderPath);
-            if (existingRecord == null)
+
+            var item = await db.PendingSyncQueue.FirstOrDefaultAsync(
+                i => searchConditions(i),
+                stoppingToken);
+            // PendingSyncItem exists
+            if (item is not null)
             {
-                db.FileSyncRecords.Add(new FileSyncRecord
-                {
-                    WatchedFolderId = folder.Id,
-                    LocalPath = folderPath,
-                    CloudId = null,
-                    FileHash = string.Empty,
-                    LastModifiedLocal = Directory.Exists(folderPath) ? Directory.GetLastWriteTimeUtc(folderPath) : DateTime.UtcNow,
-                    LastSyncedToCloud = DateTime.MinValue // Flags for upload
-                });
+                callback(item);
+                _ = await db.SaveChangesAsync(stoppingToken);
             }
+        }
+        // if it finds existing pending sync item, it'll update, otherwise, it'll create a new one
+        private async Task UpdateOrCreateNewPendingSyncItem(
+            Func<PendingSyncItem, bool> searchConditions,
+            Action<PendingSyncItem> callback,
+            PendingSyncItem syncItem,
+            CancellationToken stoppingToken)
+        {
+            await using var scope = _scopeFactory.CreateAsyncScope();
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+
+            var item = await db.PendingSyncQueue.FirstOrDefaultAsync(
+                i => searchConditions(i),
+                stoppingToken);
+            // PendingSyncItem exists
+            if (item is not null)
+            {
+                callback(item);
+                _ = await db.SaveChangesAsync(stoppingToken);
+            }
+            // PendingSyncItem does not exist, create a new one
             else
             {
-                existingRecord.LastModifiedLocal = Directory.Exists(folderPath) ? Directory.GetLastWriteTimeUtc(folderPath) : DateTime.UtcNow;
+                db.PendingSyncQueue.Add(syncItem);
+                _ = await db.SaveChangesAsync(stoppingToken);
             }
-            await db.SaveChangesAsync();
-            _logger.LogInformation("Staged [{ChangeType}] for folder: {Path}", changeType, folderPath);
         }
 
         private async Task ProcessChangedFileAsync(
+            long watchedFolderId,
             string filePath,
             string changeType,
             string? oldFilePath = null,
@@ -341,22 +344,24 @@ namespace StorageStandby.Backend.Workers
             // skip processing directories
             if (Directory.Exists(filePath))
             {
-                _ = ProcessChangedFolderAsync(filePath, changeType, oldFilePath);
+                _ = ProcessChangedFolderAsync(watchedFolderId, filePath, changeType, oldFilePath);
                 return;
             }
 
-            if (changeType != "Deleted")
+            // Event Types processing
+            if (changeType == "Deleted") // deletions
             {
-                bool unlocked = await WaitForFileUnlockAsync(filePath, maxTimeoutMs: 5000, stoppingToken);
-                // Ensure file isn't currently locked by a process (e.g. Word, Photoshop)
-                if (!unlocked)
+                bool syncItemSearch(PendingSyncItem i) =>
+                    i.WatchedFolderId == watchedFolderId
+                    && i.LocalPath == filePath
+                    && !i.IsTerminal();
+                void syncItemUpdate(PendingSyncItem item)
                 {
-                    // TODO: re-add to queue?? Maybe??
-                    _logger.LogWarning("File was locked by another process. Deferring: {Path}", filePath);
-                    return;
+                    item.Deleted = true;
                 }
+                await SetDeletePendingSyncItem(syncItemSearch, syncItemUpdate, stoppingToken);
             }
-            else if (changeType == "Renamed" && oldFilePath != null)
+            else if (changeType == "Renamed" && oldFilePath != null) // renames or moves
             {
                 // TODO: handle MOVES which count as file renames
                 // differentiate between moves and renames
@@ -369,44 +374,330 @@ namespace StorageStandby.Backend.Workers
                 if (isSameDirectory)
                 {
                     // rename
+
+                    bool syncItemSearch(PendingSyncItem i) =>
+                        i.WatchedFolderId == watchedFolderId
+                        && i.LocalPath == oldFilePath
+                        && !i.IsTerminal();
+                    void syncItemUpdate(PendingSyncItem item)
+                    {
+                        item.LocalPath = filePath;
+                        item.Renamed = true;
+                        if (string.IsNullOrEmpty(item.OriginalLocalPath))
+                        {
+                            item.OriginalLocalPath = oldFilePath;
+                        }
+                    }
+                    PendingSyncItem newSyncItem = new PendingSyncItem
+                    {
+                        WatchedFolderId = watchedFolderId,
+                        OriginalLocalPath = oldFilePath,
+                        LocalPath = filePath,
+                        Renamed = true,
+                    };
+                    await UpdateOrCreateNewPendingSyncItem(syncItemSearch, syncItemUpdate, newSyncItem, stoppingToken);
                 }
                 else
                 {
                     // move
+
+                    bool syncItemSearch(PendingSyncItem i) =>
+                        i.WatchedFolderId == watchedFolderId
+                        && i.LocalPath == oldFilePath
+                        && !i.IsTerminal();
+                    void syncItemUpdate(PendingSyncItem item)
+                    {
+                        item.LocalPath = filePath;
+                        item.Moved = true;
+                        if (string.IsNullOrEmpty(item.OriginalLocalPath))
+                        {
+                            item.OriginalLocalPath = oldFilePath;
+                        }
+                    }
+                    PendingSyncItem newSyncItem = new PendingSyncItem
+                    {
+                        WatchedFolderId = watchedFolderId,
+                        OriginalLocalPath = oldFilePath,
+                        LocalPath = filePath,
+                        Moved = true,
+                    };
+                    await UpdateOrCreateNewPendingSyncItem(syncItemSearch, syncItemUpdate, newSyncItem, stoppingToken);
+                }
+            }
+            else if (changeType == "Changed") // file edits
+            {
+                bool syncItemSearch(PendingSyncItem i) =>
+                    i.WatchedFolderId == watchedFolderId
+                    && i.LocalPath == filePath
+                    && !i.IsTerminal();
+                void syncItemUpdate(PendingSyncItem item)
+                {
+                    item.Changed = true;
+                }
+                PendingSyncItem newSyncItem = new PendingSyncItem
+                {
+                    WatchedFolderId = watchedFolderId,
+                    LocalPath = filePath,
+                    Changed = true,
+                };
+                await UpdateOrCreateNewPendingSyncItem(syncItemSearch, syncItemUpdate, newSyncItem, stoppingToken);
+            }
+            else if (changeType == "Created") // file creations
+            {
+                bool syncItemSearch(PendingSyncItem i) =>
+                    i.WatchedFolderId == watchedFolderId
+                    && i.LocalPath == filePath
+                    && !i.IsTerminal();
+                void syncItemUpdate(PendingSyncItem item)
+                {
+                    item.Created = true;
+                }
+                PendingSyncItem newSyncItem = new PendingSyncItem
+                {
+                    WatchedFolderId = watchedFolderId,
+                    LocalPath = filePath,
+                    Created = true,
+                };
+                await UpdateOrCreateNewPendingSyncItem(syncItemSearch, syncItemUpdate, newSyncItem, stoppingToken);
+            }
+        }
+
+        private async Task RenameAllChildPathsAsync(
+            long watchedFolderId,
+            string newFolderPath,
+            string oldFolderPath,
+            CancellationToken stoppingToken)
+        {
+            await using var scope = _scopeFactory.CreateAsyncScope();
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+
+            var pendingItems = await db.PendingSyncQueue
+                .Where(item =>
+                    item.WatchedFolderId == watchedFolderId &&
+                    !item.IsTerminal())
+                .ToListAsync(stoppingToken);
+
+            foreach (var item in pendingItems)
+            {
+                if (!item.LocalPath.StartsWith(
+                        oldFolderPath + Path.DirectorySeparatorChar,
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                var relativePath = Path.GetRelativePath(oldFolderPath, item.LocalPath);
+                item.LocalPath = Path.Combine(newFolderPath, relativePath);
+            }
+
+            await db.SaveChangesAsync(stoppingToken);
+        }
+
+        private async Task ProcessChangedFolderAsync(
+            long watchedFolderId,
+            string folderPath,
+            string changeType,
+            string? oldFolderPath = null,
+            CancellationToken stoppingToken = default)
+        {
+            // skip processing files
+            if (File.Exists(folderPath))
+            {
+                await ProcessChangedFileAsync(watchedFolderId, folderPath, changeType, oldFolderPath, stoppingToken);
+                return;
+            }
+
+            if (changeType == "Deleted")
+            {
+                bool syncItemSearch(PendingSyncItem i) =>
+                    i.WatchedFolderId == watchedFolderId
+                    && i.LocalPath == folderPath
+                    && !i.IsTerminal();
+                void syncItemUpdate(PendingSyncItem item)
+                {
+                    item.IsFolder = true;
+                    item.Deleted = true;
+                }
+                await SetDeletePendingSyncItem(syncItemSearch, syncItemUpdate, stoppingToken);
+                await MarkDeletedFolderContentsAsync(watchedFolderId, folderPath, stoppingToken);
+            }
+            else if (changeType == "Renamed")
+            {
+                // update all children's LocalPaths
+                string? oldParentPath = Path.GetDirectoryName(oldFolderPath);
+                string? newParentPath = Path.GetDirectoryName(folderPath);
+                bool isRename = string.Equals(
+                    oldParentPath,
+                    newParentPath,
+                    StringComparison.OrdinalIgnoreCase);
+
+                if (isRename && !string.IsNullOrEmpty(oldFolderPath))
+                {
+                    bool syncItemSearch(PendingSyncItem i) =>
+                        i.WatchedFolderId == watchedFolderId
+                        && i.LocalPath == oldFolderPath
+                        && !i.IsTerminal();
+                    void syncItemUpdate(PendingSyncItem item)
+                    {
+                        item.IsFolder = true;
+                        item.LocalPath = folderPath;
+                        item.Renamed = true;
+                        if (string.IsNullOrEmpty(item.OriginalLocalPath))
+                        {
+                            item.OriginalLocalPath = oldFolderPath;
+                        }
+                    }
+                    PendingSyncItem newSyncItem = new PendingSyncItem
+                    {
+                        IsFolder = true,
+                        WatchedFolderId = watchedFolderId,
+                        OriginalLocalPath = oldFolderPath,
+                        LocalPath = folderPath,
+                        Renamed = true,
+                    };
+                    await UpdateOrCreateNewPendingSyncItem(syncItemSearch, syncItemUpdate, newSyncItem, stoppingToken);
+
+                    await RenameAllChildPathsAsync(watchedFolderId, folderPath, oldFolderPath, stoppingToken);
+                }
+                else if (!string.IsNullOrEmpty(oldFolderPath))
+                {
+                    bool syncItemSearch(PendingSyncItem i) =>
+                        i.WatchedFolderId == watchedFolderId
+                        && i.LocalPath == oldFolderPath
+                        && !i.IsTerminal();
+                    void syncItemUpdate(PendingSyncItem item)
+                    {
+                        item.IsFolder = true;
+                        item.LocalPath = folderPath;
+                        item.Moved = true;
+                        if (string.IsNullOrEmpty(item.OriginalLocalPath))
+                        {
+                            item.OriginalLocalPath = oldFolderPath;
+                        }
+                    }
+                    PendingSyncItem newSyncItem = new PendingSyncItem
+                    {
+                        IsFolder = true,
+                        WatchedFolderId = watchedFolderId,
+                        OriginalLocalPath = oldFolderPath,
+                        LocalPath = folderPath,
+                        Moved = true,
+                    };
+                    await UpdateOrCreateNewPendingSyncItem(syncItemSearch, syncItemUpdate, newSyncItem, stoppingToken);
+
+                    await RenameAllChildPathsAsync(watchedFolderId, folderPath, oldFolderPath, stoppingToken);
+                }
+            }
+            else if (changeType == "Created")
+            {
+                bool syncItemSearch(PendingSyncItem i) =>
+                    i.WatchedFolderId == watchedFolderId
+                    && i.LocalPath == folderPath
+                    && !i.IsTerminal();
+                void syncItemUpdate(PendingSyncItem item)
+                {
+                    item.IsFolder = true;
+                    item.Created = true;
+                }
+                PendingSyncItem newSyncItem = new PendingSyncItem
+                {
+                    IsFolder = true,
+                    WatchedFolderId = watchedFolderId,
+                    LocalPath = folderPath,
+                    Created = true,
+                };
+                await UpdateOrCreateNewPendingSyncItem(syncItemSearch, syncItemUpdate, newSyncItem, stoppingToken);
+
+                await QueueCreatedFolderContentsAsync(watchedFolderId, folderPath, stoppingToken);
+            }
+        }
+
+        private async Task MarkDeletedFolderContentsAsync(
+            long watchedFolderId,
+            string deletedFolderPath,
+            CancellationToken stoppingToken)
+        {
+            string deletedFolderPrefix = deletedFolderPath.TrimEnd(
+                Path.DirectorySeparatorChar,
+                Path.AltDirectorySeparatorChar)
+                + Path.DirectorySeparatorChar;
+
+            await using var scope = _scopeFactory.CreateAsyncScope();
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+
+            var pendingItems = await db.PendingSyncQueue
+                .Where(item =>
+                    item.WatchedFolderId == watchedFolderId
+                    && !item.IsTerminal()
+                    && item.LocalPath.StartsWith(deletedFolderPath))
+                .ToListAsync(stoppingToken);
+
+            foreach (var item in pendingItems)
+            {
+                if (item.LocalPath.StartsWith(
+                        deletedFolderPrefix,
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    item.Deleted = true;
                 }
             }
 
-            // -----------------------------------------------------------
-            // Sync/Object Updates
+            await db.SaveChangesAsync(stoppingToken);
+        }
 
-            // Create short-lived DB scope to save sync staging state  
-            // using var scope = _scopeFactory.CreateScope();
-            // var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        private async Task QueueCreatedFolderContentsAsync(
+            long watchedFolderId,
+            string folderPath,
+            CancellationToken stoppingToken)
+        {
+            var children = _fileSystem.GetAllNestedChildren(folderPath);
+            if (children is null)
+            {
+                return;
+            }
 
-            // var existingRecord = await db.FileSyncRecords
-            //     .FirstOrDefaultAsync(f => f.WatchedFolderId == folder.Id && f.LocalPath == filePath);
+            var childPaths = children.Files
+                .Select(path => new { Path = path, IsFolder = false })
+                .Concat(children.Folders.Select(path => new { Path = path, IsFolder = true }))
+                .ToList();
 
-            // if (existingRecord == null)
-            // {
-            //     db.FileSyncRecords.Add(new FileSyncRecord
-            //     {
-            //         WatchedFolderId = folder.Id,
-            //         LocalPath = filePath,
-            //         CloudId = null,
-            //         FileHash = string.Empty,
-            //         LastModifiedLocal = File.Exists(filePath) ? File.GetLastWriteTimeUtc(filePath) : DateTime.UtcNow,
-            //         LastSyncedToCloud = DateTime.MinValue // Flags for upload
-            //     });
-            // }
-            // else
-            // {
-            //     existingRecord.LastModifiedLocal = File.Exists(filePath) ? File.GetLastWriteTimeUtc(filePath) : DateTime.UtcNow;
-            // }
+            if (childPaths.Count == 0)
+            {
+                return;
+            }
 
-            // await db.SaveChangesAsync();
-            // _logger.LogInformation("Staged [{ChangeType}] for file: {Path}", changeType, filePath);
+            await using var scope = _scopeFactory.CreateAsyncScope();
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var paths = childPaths.Select(child => child.Path).ToList();
 
-            // TODO: Push record into SQLite PendingSyncQueue
+            var existingItems = await db.PendingSyncQueue
+                .Where(item => item.WatchedFolderId == watchedFolderId && paths.Contains(item.LocalPath))
+                .ToListAsync(stoppingToken);
+
+            var existingActiveItems = existingItems
+                .Where(item => !item.IsTerminal())
+                .GroupBy(item => item.LocalPath, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
+
+            foreach (var child in childPaths)
+            {
+                if (existingActiveItems.TryGetValue(child.Path, out var existingItem))
+                {
+                    existingItem.IsFolder = child.IsFolder;
+                    existingItem.Created = true;
+                    continue;
+                }
+
+                db.PendingSyncQueue.Add(new PendingSyncItem
+                {
+                    WatchedFolderId = watchedFolderId,
+                    LocalPath = child.Path,
+                    IsFolder = child.IsFolder,
+                    Created = true
+                });
+            }
+
+            await db.SaveChangesAsync(stoppingToken);
         }
 
         private async Task<bool> WaitForFileUnlockAsync(

@@ -14,6 +14,8 @@ namespace StorageStandby.Backend.Data
         // Yo reconsider this portion:
         public DbSet<FileSyncRecord> FileSyncRecords { get; set; }
 
+        public DbSet<PendingSyncItem> PendingSyncQueue { get; set; }
+
         // The constructor passes configuration options (like the file path) to the base EF Core engine
         public AppDbContext(DbContextOptions<AppDbContext> options) : base(options)
         {
