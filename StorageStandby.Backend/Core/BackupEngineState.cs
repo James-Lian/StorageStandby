@@ -74,7 +74,7 @@ namespace StorageStandby.Backend.Core
         public List<string> ActiveWatchedPaths { get; set; } = new();
 
         //trigger to tell the background worker a new folder was added
-        public event Action<string>? OnNewFolderAdded;
+        public event Action<WatchedFolder>? OnNewFolderAdded;
 
 
         // ----------------------------------------------------------------------
