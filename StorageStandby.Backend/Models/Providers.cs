@@ -30,7 +30,7 @@ namespace StorageStandby.Backend.Models
         public static readonly FrozenDictionary<Providers, string> TokenEndpoints = new Dictionary<Providers, string>
         {
             { Providers.Google, "https://oauth2.googleapis.com/token" },
-            { Providers.Microsoft, "" },
+            { Providers.Microsoft, "https://login.microsoftonline.com/common/oauth2/v2.0/token" },
             { Providers.Dropbox, "" },
             { Providers.pDrive, "" }
 
