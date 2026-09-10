@@ -16,10 +16,12 @@ public class TokenManager
 
     // Memory cache for the short-lived access token
     private readonly ConcurrentDictionary<Providers, ConcurrentDictionary<string, string>?> _cachedAccessTokens = new() {
-        [Providers.Google] = new ConcurrentDictionary<string, string> { }
+        [Providers.Google] = new ConcurrentDictionary<string, string> { },
+        [Providers.Microsoft] = new ConcurrentDictionary<string, string> { }
     };
     private readonly ConcurrentDictionary<Providers, ConcurrentDictionary<string, DateTime>?> _accessTokenExpirations = new() {
         [Providers.Google] = new ConcurrentDictionary<string, DateTime> { },
+        [Providers.Microsoft] = new ConcurrentDictionary<string, DateTime> { }
     };
 
     public TokenManager(
@@ -38,27 +40,28 @@ public class TokenManager
     // Thread-safe-ish helpers (EF Core DbContext is not thread-safe, so we create a new scope for each operation), add locking if heavy concurrency expected
     public void SetCachedAccessToken(Providers provider, string accountId, string accessToken, int expiresInSeconds)
     {
-        if (_cachedAccessTokens[provider] == null)
-        {
-            _cachedAccessTokens[provider] = new ConcurrentDictionary<string, string>();
-        }
-        if (_accessTokenExpirations[provider] == null)
-        {
-            _accessTokenExpirations[provider] = new ConcurrentDictionary<string, DateTime>();
-        }
-        _cachedAccessTokens[provider][accountId] = accessToken;
-        _accessTokenExpirations[provider][accountId] = DateTime.UtcNow.AddSeconds(expiresInSeconds);
+        var tokenCache = _cachedAccessTokens.GetOrAdd(
+            provider,
+            _ => new ConcurrentDictionary<string, string>())
+            ?? throw new InvalidOperationException("Access-token cache could not be initialized.");
+        var expirationCache = _accessTokenExpirations.GetOrAdd(
+            provider,
+            _ => new ConcurrentDictionary<string, DateTime>())
+            ?? throw new InvalidOperationException("Access-token expiration cache could not be initialized.");
+
+        tokenCache[accountId] = accessToken;
+        expirationCache[accountId] = DateTime.UtcNow.AddSeconds(expiresInSeconds);
     }
 
     public void ClearCachedAccessToken(Providers provider, string accountId)
     {
         if (_cachedAccessTokens.TryGetValue(provider, out var providerDict))
         {
-            providerDict.TryRemove(accountId, out _);
+            providerDict?.TryRemove(accountId, out _);
         }
         if (_accessTokenExpirations.TryGetValue(provider, out var expirationDict))
         {
-            expirationDict.TryRemove(accountId, out _);
+            expirationDict?.TryRemove(accountId, out _);
         }
     }
 
@@ -98,7 +101,7 @@ public class TokenManager
         else
         {
             existing.EncryptedRefreshToken = encryptedToken;
-            existing.LastUpdated = DateTime.UtcNow; 
+            existing.LastUpdated = DateTime.UtcNow;
             existing.Status = ConnectionStatus.Connected;
             existing.AccountId = accountId;
             existing.Email = email;
@@ -160,10 +163,11 @@ public class TokenManager
     {
         // 1. Check if our in-memory access token is still valid (with a 5-minute safety buffer)
         if (_cachedAccessTokens.TryGetValue(provider, out var providerDict)
-            && providerDict.TryGetValue(accountId, out var cachedToken)
             && providerDict != null
+            && providerDict.TryGetValue(accountId, out var cachedToken)
             && !string.IsNullOrEmpty(cachedToken) 
             && _accessTokenExpirations.TryGetValue(provider, out var expDict)
+            && expDict != null
             && expDict.TryGetValue(accountId, out var expiry)
             && DateTime.UtcNow.AddMinutes(5) < expiry)
         {
@@ -185,21 +189,36 @@ public class TokenManager
         var protector = _dataProtector.CreateProtector($"{ProviderMetadata.ProviderNames[provider]}TokenProtector");
         string refreshToken = protector.Unprotect(tokenRecord.EncryptedRefreshToken);
 
-        // 3. POST to Google's Token Endpoint with grant_type = "refresh_token"
+        // 3. Exchange the refresh token at the provider's token endpoint.
         string clientId = _config[$"{ProviderMetadata.ProviderNames[provider]}OAuth:ClientId"]!;
-        string clientSecret = _config[$"{ProviderMetadata.ProviderNames[provider]}OAuth:ClientSecret"]!;
 
         var httpClient = _httpClientFactory.CreateClient(ProviderMetadata.ProviderNames[provider]);
 
-        var requestBody = new FormUrlEncodedContent(new Dictionary<string, string>
+        var refreshTokenParameters = new Dictionary<string, string>
         {
             { "client_id", clientId },
-            { "client_secret", clientSecret },
             { "refresh_token", refreshToken },
             { "grant_type", "refresh_token" } // Notice grant_type here!
-        });
+        };
 
-        var response = await httpClient.PostAsync(ProviderMetadata.TokenEndpoints[provider], requestBody);
+        if (provider != Providers.Microsoft)
+        {
+            refreshTokenParameters["client_secret"] = _config[
+                $"{ProviderMetadata.ProviderNames[provider]}OAuth:ClientSecret"]
+                ?? throw new InvalidOperationException(
+                    $"{ProviderMetadata.ProviderNames[provider]} client secret not configured.");
+        }
+
+        var requestBody = new FormUrlEncodedContent(refreshTokenParameters);
+
+        string tokenEndpoint = ProviderMetadata.TokenEndpoints[provider];
+        if (provider == Providers.Microsoft)
+        {
+            string tenant = _config["MicrosoftOAuth:TenantID"] ?? "common";
+            tokenEndpoint = $"https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token";
+        }
+
+        var response = await httpClient.PostAsync(tokenEndpoint, requestBody);
 
         if (response.IsSuccessStatusCode)
         {

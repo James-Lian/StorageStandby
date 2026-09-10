@@ -9,6 +9,7 @@ using System.Diagnostics;
 using System.Net;
 using System.Net.NetworkInformation;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Text.Json;
 using System.Threading.Tasks;
 
@@ -99,16 +100,26 @@ namespace StorageStandby.Backend.Services
             int port = GetAvailablePort(5431);
             string redirectUri = $"http://localhost:{port}/callback";
 
+            // PKCE binds the authorization code to this authorization request.
+            string codeVerifier = CreateCodeVerifier();
+            string codeChallenge = CreateCodeChallenge(codeVerifier);
+            string state = CreateCodeVerifier();
+
             // Build authorization URL requesting offline access (gives us a refresh token)
             string scope = Uri.EscapeDataString(
                 "https://www.googleapis.com/auth/drive.file " + 
                 "https://www.googleapis.com/auth/drive.activity " +
-                "openid email profile");
+                "https://www.googleapis.com/auth/userinfo.email " +
+                "https://www.googleapis.com/auth/userinfo.profile " +
+                "openid");
             string authUrl = $"https://accounts.google.com/o/oauth2/v2/auth?" +
                 $"client_id={clientId}&" +
                 $"redirect_uri={redirectUri}&" +
                 $"response_type=code&" +
-                $"scope={scope}& +" +
+                $"scope={scope}&" +
+                $"code_challenge={codeChallenge}&" +
+                $"code_challenge_method=S256&" +
+                $"state={state}&" +
                 $"access_type=offline&" +
                 $"prompt=consent"; // force consent to guarantee refresh_token is returned
 
@@ -165,6 +176,7 @@ namespace StorageStandby.Backend.Services
                 // Extract authorization code
                 string? code = context.Request.QueryString["code"];
                 string? error = context.Request.QueryString["error"];
+                string? returnedState = context.Request.QueryString["state"];
 
                 if (!string.IsNullOrEmpty(error) || string.IsNullOrEmpty(code))
                 {
@@ -175,6 +187,21 @@ namespace StorageStandby.Backend.Services
                     { 
                         Success = false, 
                         Message = $"Google OAuth error: {error ?? "No code returned"}" 
+                    };
+                }
+
+                if (string.IsNullOrEmpty(returnedState) ||
+                    !CryptographicOperations.FixedTimeEquals(
+                        System.Text.Encoding.UTF8.GetBytes(state),
+                        System.Text.Encoding.UTF8.GetBytes(returnedState)))
+                {
+                    byte[] errBytes = System.Text.Encoding.UTF8.GetBytes("<html><body><h2>Authentication response rejected</h2></body></html>");
+                    context.Response.OutputStream.Write(errBytes, 0, errBytes.Length);
+                    context.Response.Close();
+                    return new AuthResult
+                    {
+                        Success = false,
+                        Message = "OAuth state validation failed."
                     };
                 }
 
@@ -195,6 +222,7 @@ namespace StorageStandby.Backend.Services
                     { "client_id", clientId },
                     { "client_secret", clientSecret  },
                     { "code", code },
+                    { "code_verifier", codeVerifier },
                     { "grant_type", "authorization_code" },
                     { "redirect_uri", redirectUri },
                 };
@@ -314,6 +342,25 @@ namespace StorageStandby.Backend.Services
                 socket.Bind(new System.Net.IPEndPoint(System.Net.IPAddress.Loopback, 0)); // Bind to any available port
                 return ((System.Net.IPEndPoint)socket.LocalEndPoint).Port;
             }
+        }
+
+        private static string CreateCodeVerifier()
+        {
+            return Base64UrlEncode(RandomNumberGenerator.GetBytes(64));
+        }
+
+        private static string CreateCodeChallenge(string codeVerifier)
+        {
+            byte[] verifierBytes = System.Text.Encoding.ASCII.GetBytes(codeVerifier);
+            return Base64UrlEncode(SHA256.HashData(verifierBytes));
+        }
+
+        private static string Base64UrlEncode(byte[] value)
+        {
+            return Convert.ToBase64String(value)
+                .TrimEnd('=')
+                .Replace('+', '-')
+                .Replace('/', '_');
         }
 
         // checks whether a specific TCP port is available for use on the local machine

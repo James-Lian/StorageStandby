@@ -41,11 +41,14 @@ builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseSqlite("Data Source=storagestandby.db");
 });
 builder.Services.AddScoped<GoogleDriveProvider>();
+builder.Services.AddScoped<OneDriveProvider>();
 builder.Services.AddHostedService<FileSystemWatcherWorker>(); // configures as a background service, akin to a singleton
 builder.Services.AddMemoryCache();
 
 // Automatically registers GoogleDriveProvider as a service AND manages its HttpClient
 builder.Services.AddHttpClient<GoogleDriveProvider>()
+    .SetHandlerLifetime(TimeSpan.FromMinutes(5));
+builder.Services.AddHttpClient<OneDriveProvider>()
     .SetHandlerLifetime(TimeSpan.FromMinutes(5));
 // Register Providers typed client and configure HttpClientFactory handler rotation (prevents stale DNS)
 foreach (Providers provider in Enum.GetValues<Providers>())

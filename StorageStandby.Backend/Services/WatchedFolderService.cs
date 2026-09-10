@@ -55,6 +55,7 @@ namespace StorageStandby.Backend.Services
             return null;
         }
 
+        // https://code.visualstudio.com/docs/editor/glob-patterns <-- Glob patterns reference
         public async Task ReconcileIgnoreRulesAsync(
             long watchedFolderId,
             string oldIgnoreRules,
