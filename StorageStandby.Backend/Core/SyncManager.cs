@@ -34,5 +34,10 @@ namespace StorageStandby.Backend.Core
         // ----------------------------------------------------------------------------------------------------
         // Sync & Queue Methods
 
+        // see which queue actions have previous dependencies
+        public void QueueDependencyChecker()
+        {
+            
+        }
     }
 }

@@ -29,6 +29,18 @@ namespace StorageStandby.Backend.Services
             return null;
         }
 
+        public WatchedFolder GetWatchedFolderFromPath(string path) {
+            using var scope = _scopeFactory.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+
+            var folder = db.WatchedFolders.FirstOrDefault(f => f.LocalPath == path);
+            if (folder is not null)
+            {
+                return folder;
+            }
+            return null;
+        }
+
         public string? GetWatchedFolderPathFromId(long id)
         {
             using var scope = _scopeFactory.CreateScope();
