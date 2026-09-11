@@ -1,4 +1,4 @@
-import { ArrowDownUp, Ellipsis, ArrowUp, ChevronDown, Folder, FolderPlus, Grid, List, Plus, Trash2, Upload, ArrowDown } from "lucide-react"
+import { ArrowDownUp, Ellipsis, ArrowUp, ChevronDown, Folder, FolderPlus, Grid, List, Plus, Trash2, Upload, ArrowDown, CircleCheck, CircleDashed, CircleX } from "lucide-react"
 import { useMemo, useState } from "react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -234,6 +234,7 @@ export function Folders() {
 										className="border-black"
 									/>
 								</TableHead>
+								<TableHead>Status</TableHead>
 								<TableHead>Name</TableHead>
 								<TableHead>Sync status</TableHead>
 								<TableHead>Last synced</TableHead>
@@ -245,6 +246,21 @@ export function Folders() {
 						<TableBody>
 							{filteredFolders.map((folder) => (
 								<TableRow key={folder.id} className={selectedRows.includes(folder.id) ? "bg-muted" : ""}>
+									<TableCell>
+										<Tooltip>
+											<TooltipTrigger asChild>
+												<CircleCheck></CircleCheck>
+												<CircleDashed></CircleDashed>
+												<Button variant={"destructive"}>
+													<CircleX></CircleX>
+												</Button>
+											</TooltipTrigger>
+											<TooltipContent>
+												All items up to date.
+												Last modification monitored: 2026/12/23
+											</TooltipContent>
+										</Tooltip>
+									</TableCell>
 									<TableCell>
 										<Checkbox 
 											checked={selectedRows.includes(folder.id)} 
@@ -261,8 +277,8 @@ export function Folders() {
 									</TableCell>
 									<TableCell>
 										<Tooltip>
-										<TooltipTrigger asChild>
-											<Button variant="link" className="cursor-pointer">
+											<TooltipTrigger asChild>
+												<Button variant="link" className="cursor-pointer">
 													{folder.name}
 												</Button>
 											</TooltipTrigger>
@@ -276,7 +292,9 @@ export function Folders() {
 											{folder.syncStatus}
 										</Badge>
 									</TableCell>
-									<TableCell>{folder.lastSynced}</TableCell>
+									<TableCell>
+										{folder.lastSynced}
+									</TableCell>
 									<TableCell>{folder.size}</TableCell>
 									<TableCell>
 										<Badge variant="outline">{folder.tag}</Badge>
@@ -375,6 +393,7 @@ export function Folders() {
 														<DropdownMenuContent>
 															<DropdownMenuItem>Open</DropdownMenuItem>
 															<DropdownMenuItem>Move</DropdownMenuItem>
+															<DropdownMenuItem>Reupload Now</DropdownMenuItem>
 															<DropdownMenuItem variant="destructive">Remove</DropdownMenuItem>
 														</DropdownMenuContent>
 													</DropdownMenuPortal>

@@ -13,6 +13,12 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using System.Threading.Tasks;
 
+using Google.Apis.Auth.OAuth2;
+using Google.Apis.Drive.v3;
+using Google.Apis.Services;
+using Google.Apis.Upload;
+
+
 namespace StorageStandby.Backend.Services
 {
     public class GoogleDriveProvider
@@ -23,6 +29,7 @@ namespace StorageStandby.Backend.Services
         private readonly HttpClient _httpClient;
         private readonly IConfiguration _configuration;
         private readonly TokenManager _tokenManager;
+        // private readonly DriveService _driveService;
         public string ProviderName => "GoogleDrive";
         public GoogleDriveProvider(
             AppDbContext db,
@@ -30,7 +37,8 @@ namespace StorageStandby.Backend.Services
             IDataProtectionProvider dataProtector,
             IConfiguration configuration,
             HttpClient httpClient,
-            TokenManager tokenManager)
+            TokenManager tokenManager,
+            DriveService driveService)
         {
             _db = db;
             _state = state;
@@ -40,10 +48,92 @@ namespace StorageStandby.Backend.Services
             _tokenManager = tokenManager;
         }
 
+        // idk if it'll return void yet
+        public class GoogleSyncResult {
+            public SyncEventType Status { get; set; }
+        }
+        public GoogleSyncResult ExecuteSyncQueue(SyncEvent event)
+        {
+            
+        }
+        private DriveService BuildDriveClient(string currentAccessToken)
+        {
+            var credential = GoogleCredential.FromAccessToken(currentAccessToken);
+
+            return new DriveService(new BaseClientService.Initializer
+            {
+                HttpClientInitializer = credential,
+                ApplicationName = "StorageStandby"
+            });
+
+            // Build a short-lived client context right here
+            // 401 Unauthorized error if access token expired
+            using var driveService = BuildDriveClient(currentAccessToken);
+        }
+
         public async Task GetRemainingStorageQuotaAsync()
         {
             // Implement logic to get remaining storage quota from Google Drive API
             throw new NotImplementedException();
+        }
+
+        public async Task<string> CreateFolderAsync(DriveService driveService, string currentAccessToken, string folderName, string parentId = null)
+        {
+            var folderMetadata = new Google.Apis.Drive.v3.Data.File
+            {
+                Name = folderName,
+                MimeType = "application/vnd.google-apps.folder"
+            };
+
+            if (!string.IsNullOrEmpty(parentId))
+            {
+                folderMetadata.Parents = new List<string> { parentId };
+            }
+
+            var request = driveService.Files.Create(folderMetadata);
+            request.Fields = "id";
+            
+            var folder = await request.ExecuteAsync();
+            return folder.Id;
+        }
+
+        /// <summary>
+        /// Uploads a single file using the exact access token provided at execution time.
+        /// </summary>
+        public async Task<string> UploadSingleFileAsync(string currentAccessToken, string localPath, string remoteName, string parentId = null)
+        {
+            using var driveService = BuildDriveClient(currentAccessToken);
+
+            var fileMetadata = new Google.Apis.Drive.v3.Data.File
+            {
+                Name = remoteName
+            };
+
+            if (!string.IsNullOrEmpty(parentId))
+            {
+                fileMetadata.Parents = new List<string> { parentId };
+            }
+
+            using (var stream = new FileStream(localPath, FileMode.Open, FileAccess.Read))
+            {
+                var request = driveService.Files.Create(fileMetadata, stream, "application/octet-stream");
+                request.Fields = "id";
+
+                var progress = await request.UploadAsync(CancellationToken.None);
+
+                if (progress.Status == UploadStatus.Failed)
+                {
+                    throw new Exception($"Upload failed for {remoteName}: {progress.Exception?.Message}");
+                }
+
+                return request.ResponseBody?.Id;
+            }
+        }
+    
+
+        public async Task RenameFileAsync(string localFilePath)
+        {
+            
         }
 
         public async Task UploadFileAsync(string localFilePath, string remoteFolderPath)
@@ -55,6 +145,21 @@ namespace StorageStandby.Backend.Services
             // Implement logic to upload file to Google Drive using Google Drive API
             throw new NotImplementedException();
 
+        }
+
+        public async Task DeleteFileAsync(string localFilePath, string remoteFolderPath)
+        {
+            
+        }
+
+        public async Task CreateFolderAsync()
+        {
+            
+        }
+
+        public async Task DeleteFolderAsync()
+        {
+            
         }
 
         // ----------------------------------------------------------

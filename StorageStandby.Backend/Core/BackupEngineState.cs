@@ -7,13 +7,24 @@ using System.Linq;
 using System.Net.NetworkInformation;
 using StorageStandby.Backend.Models;
 using StorageStandby.Backend.Data;
+using StorageStandby.Backend.Services;
 
 namespace StorageStandby.Backend.Core
 {
-    public class BackupEngineState (
-        AppDbContext _db
-    )
+    public class BackupEngineState
     {
+        private readonly WatchedFolderService _watchedFolderService;
+        private readonly AppDbContext _db;
+
+        public BackupEngineState(
+            WatchedFolderService watchedFolderService,
+            AppDbContext db
+        )
+        {
+            _watchedFolderService = watchedFolderService;
+            _db = db;
+        }
+
         // *** high level state ***
         public string Status { get; set; } = "Initializing";
         private bool _isSyncPaused { get; set; } = false;
@@ -88,7 +99,7 @@ namespace StorageStandby.Backend.Core
             if (!ActiveWatchedPaths.Contains(path))
             {
                 ActiveWatchedPaths.Add(path);
-                OnNewFolderAdded?.Invoke(path);
+                OnNewFolderAdded?.Invoke(_watchedFolderService.GetWatchedFolderFromPath(path));
             }
         }
 

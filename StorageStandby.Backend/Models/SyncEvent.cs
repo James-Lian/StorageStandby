@@ -9,7 +9,7 @@ namespace StorageStandby.Backend.Models
         InProgress = 1,
         Interrupted = 2,
         Succeeded = 3,
-        Failed = 4,
+        Unfinished = 4,
         Other = 5,
     }
 
@@ -26,6 +26,8 @@ namespace StorageStandby.Backend.Models
         // ----------------------------------------------------------
         // Sync Event information
         public string SyncedItems { get; set; } = string.Empty; // semicolon delimited - files
+        public string FailedItems { get; set; } = string.Empty;
+        public string UnfinishedItems { get; set; } = string.Empty;
         public Providers Provider { get; set; }
         public string AccountId { get; set; }
 
