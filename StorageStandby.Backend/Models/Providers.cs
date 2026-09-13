@@ -17,6 +17,12 @@ namespace StorageStandby.Backend.Models
         Reauthenticate = 2
     }
 
+    public class ProviderAccountCloud
+    {
+        public Providers Provider { get; set; }
+        public string AccountId { get; set; } = string.Empty;
+    }
+
     public static class ProviderMetadata
     {
         public static readonly FrozenDictionary<Providers, string> ProviderNames = new Dictionary<Providers, string>

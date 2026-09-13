@@ -8,6 +8,7 @@ namespace StorageStandby.Backend.Data
     public class AppDbContext : DbContext
     {
         public DbSet<WatchedFolder> WatchedFolders { get; set; }
+        public DbSet<WatchedFolderCloudMetadata> WatchedFolderCloudMetadata { get; set; }
         public DbSet<CloudToken> CloudTokens { get; set; }
         public DbSet<SystemSettings> SystemSettings { get; set; }
 

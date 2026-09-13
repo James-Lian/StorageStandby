@@ -18,9 +18,7 @@ using System.Threading.Tasks;
 // The intuition is that checking a folder's last-modified date is fast ("polling"). However, on Windows, file systems don't update top-level folder dates recursively when a file inside them changes. Therefore, we cannot make our polling more efficient by choosing subdirectories through elimination (date-checking and comparing with last synced date). If we were polling, we would have to check every single file in every single watched folder, which is inefficient. Instead, we use FileSystemWatcher, which is event-driven and only triggers when a file changes. This is more efficient than polling, especially for large directories.
 
 
-// TODO: When sanity-checking last-modified dates; any files not already in the upload queue get their date checked as well. This catches any files we missed if the background polling failed. 
-// TODO: If restarting, attach new workers to files based on WatchedFolder ignore rules
-// TODO: When checking whether updates are valid - check if any folder paths changed (directory or subdirectory or otherwise)
+// TODO: Add FileSystemWatcher's to WatchedFolder parents as well just to check for renames and deletions - the root folders of FileSystemWatchers don't fire for such events
 
 namespace StorageStandby.Backend.Workers
 {
@@ -54,9 +52,6 @@ namespace StorageStandby.Backend.Workers
             _cache = cache;
             _fileSystem = fileSystem;
             _watchedFolderService = watchedFolderService;
-
-            // TODO: wtf is this
-            _state.OnNewFolderAdded += AttachWatcher;
         }
 
         // DEV: protected override - a method that can only be accessed by this class or derived classes, and overrides a base class method
@@ -144,7 +139,7 @@ namespace StorageStandby.Backend.Workers
                 // If the folder is not already watched, and it exists
                 if (!_activeWatchers.ContainsKey(id) && Directory.Exists(folder.LocalPath))
                 {
-                    AttachWatcher(folder);
+                    await AttachWatcherAsync(folder, stoppingToken);
                 }
                 else if (!Directory.Exists(folder.LocalPath))
                 {
@@ -162,10 +157,21 @@ namespace StorageStandby.Backend.Workers
             }
         }
 
-        private void AttachWatcher(WatchedFolder folder)
+        private async Task AttachWatcherAsync(WatchedFolder folder, CancellationToken stoppingToken)
         {
             try
             {
+                if (folder.LocalPath is null) throw new NullReferenceException("WatchedFolder LocalPath is null: " + folder);
+                if (!Directory.Exists(folder.LocalPath)) 
+                { 
+                    folder.Problem = ProblematicFolderType.InvalidPath;
+                    await _watchedFolderService.SetProblemAsync(
+                        folder.Id,
+                        ProblematicFolderType.InvalidPath,
+                        stoppingToken);
+                    throw new FileNotFoundException("WatchedFolder LocalPath: " + folder.LocalPath + " does not exist.");
+                }
+
                 // System.IO.FileSystemWatcher monitors specific directory and raises events when files/subdirectories are created, modified, renamed, or deleted
                 // more efficient than polling because it uses OS-level notifications
                 var watcher = new FileSystemWatcher(folder.LocalPath!)
@@ -760,8 +766,6 @@ namespace StorageStandby.Backend.Workers
                 watcher.Dispose();
             }
             _activeWatchers.Clear();
-            // TODO: wtf is this
-            _state.OnNewFolderAdded -= AttachWatcher;
 
             base.Dispose();
         }

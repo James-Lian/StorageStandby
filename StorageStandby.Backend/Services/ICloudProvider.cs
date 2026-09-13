@@ -1,5 +1,6 @@
 ﻿using Microsoft.AspNetCore.DataProtection;
 using StorageStandby.Backend.Data;
+using StorageStandby.Backend.Models;
 using System.Threading.Tasks;
 
 public class AuthResult
@@ -10,12 +11,21 @@ public class AuthResult
 
 namespace StorageStandby.Backend.Services
 {
+    public sealed class SyncResult
+    {
+        public SyncEventType Status { get; init; }
+        public int Succeeded { get; init; }
+        public int Failed { get; init; }
+        public int Unfinished { get; init; }
+    }
     public interface ICloudProvider
     {
         string ProviderName { get; }
+        Task<SyncResult> ExecuteSyncQueueAsync();
         Task<long> GetRemainingStorageQuotaAsync();
-        Task UploadFileAsync(string localFilePath, string remoteFolderPath);
-        Task DeleteFileAsync(string remoteFileId);
+        Task UploadAsync(string localFilePath, string remoteFolderPath);
+        Task DeleteAsync(string remoteFileId);
+        Task MoveAsync();
         Task StartOAuthAsync(
             AppDbContext db,
             IDataProtectionProvider dataProtector,
