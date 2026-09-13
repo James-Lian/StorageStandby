@@ -12,7 +12,7 @@ namespace StorageStandby.Backend.Data
         public DbSet<SystemSettings> SystemSettings { get; set; }
 
         // Yo reconsider this portion:
-        public DbSet<FileSyncRecord> FileSyncRecords { get; set; }
+        public DbSet<SyncEvent> SyncEvents { get; set; }
 
         public DbSet<PendingSyncItem> PendingSyncQueue { get; set; }
 

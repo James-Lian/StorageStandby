@@ -17,6 +17,7 @@ using Google.Apis.Auth.OAuth2;
 using Google.Apis.Drive.v3;
 using Google.Apis.Services;
 using Google.Apis.Upload;
+using GoogleApiException = Google.GoogleApiException;
 
 
 namespace StorageStandby.Backend.Services
@@ -29,7 +30,6 @@ namespace StorageStandby.Backend.Services
         private readonly HttpClient _httpClient;
         private readonly IConfiguration _configuration;
         private readonly TokenManager _tokenManager;
-        // private readonly DriveService _driveService;
         public string ProviderName => "GoogleDrive";
         public GoogleDriveProvider(
             AppDbContext db,
@@ -48,14 +48,317 @@ namespace StorageStandby.Backend.Services
             _tokenManager = tokenManager;
         }
 
-        // idk if it'll return void yet
-        public class GoogleSyncResult {
-            public SyncEventType Status { get; set; }
-        }
-        public GoogleSyncResult ExecuteSyncQueue(SyncEvent event)
+        public sealed class GoogleSyncResult
         {
-            
+            public SyncEventType Status { get; init; }
+            public int Succeeded { get; init; }
+            public int Failed { get; init; }
+            public int Unfinished { get; init; }
         }
+
+        // The items to be synced are passed into this function
+        public async Task<GoogleSyncResult> ExecuteSyncQueueAsync(
+            SyncEvent syncEvent, // pre-created and passed in
+            string currentAccessToken, // accessToken for API services
+            IReadOnlyList<PendingSyncItem> queue, // queue to be persisted
+            CancellationToken cancellationToken = default)
+        {
+            ArgumentNullException.ThrowIfNull(syncEvent);
+            ArgumentException.ThrowIfNullOrWhiteSpace(currentAccessToken);
+            ArgumentNullException.ThrowIfNull(queue);
+
+            // add unfinished items
+            syncEvent.UnfinishedItems = string.Join(";", queue.Select(i => i.LocalPath));
+
+            // building a Drive Client with currentAccessToken
+            using var driveService = BuildDriveClient(currentAccessToken);
+
+            var watchedFolder = await _db.WatchedFolders
+                .Include(folder => folder.AssignedClouds)
+                .SingleAsync(folder => folder.Id == syncEvent.WatchedFolderId, cancellationToken);
+            // assigned cloud
+            var cloud = watchedFolder.AssignedClouds.Single(metadata =>
+                metadata.Provider == Providers.Google && metadata.AccountId == syncEvent.AccountId);
+
+            // syncEvent metadata
+            syncEvent.CompletionType = SyncEventType.InProgress;
+            syncEvent.CompletedTimestamp = null;
+            await _db.SaveChangesAsync(cancellationToken);
+
+            // success counters
+            int initialCount = syncEvent.UnfinishedItems.Count();
+            int succeeded = 0;
+            int failed = 0;
+
+            // iterate through queue
+            foreach (var item in queue)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                try
+                {
+                    await ExecuteItemAsync(driveService, watchedFolder.LocalPath!, cloud.RemoteFolderId, item, cancellationToken);
+                    succeeded++;
+                    syncEvent.SyncedItems = AppendPath(syncEvent.SyncedItems, item.LocalPath);
+                    syncEvent.UnfinishedItems = RemovePath(syncEvent.SyncedItems, item.LocalPath);
+                }
+                catch (OperationCanceledException)
+                {
+                    syncEvent.CompletionType = SyncEventType.Interrupted;
+                    syncEvent.CompletedTimestamp = DateTime.UtcNow;
+                    _db.SaveChanges();
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    failed++;
+                    syncEvent.FailedItems.Add(new FailedItemsDetails
+                    {
+                        FailedItem = item.LocalPath,
+                        Details = ex.Message
+                    });
+                }
+
+                await _db.SaveChangesAsync(cancellationToken);
+            }
+
+            syncEvent.CompletionType = failed == 0 ? SyncEventType.Succeeded : SyncEventType.Unfinished;
+            syncEvent.CompletedTimestamp = DateTime.UtcNow;
+            await _db.SaveChangesAsync(cancellationToken);
+
+            return new GoogleSyncResult
+            {
+                Status = syncEvent.CompletionType,
+                Succeeded = succeeded,
+                Failed = failed,
+                Unfinished = initialCount - succeeded - failed
+            };
+        }
+
+        private async Task ExecuteItemAsync(
+            DriveService driveService,
+            string localRootPath,
+            string remoteRootId,
+            PendingSyncItem item,
+            CancellationToken cancellationToken)
+        {
+            if (item.Deleted)
+            {
+                var remoteItem = await FindByLocalPathAsync(driveService, remoteRootId,
+                    localRootPath, item.OriginalLocalPath ?? item.LocalPath, cancellationToken)
+                    ?? throw new FileNotFoundException("Remote item to delete was not found.", item.LocalPath);
+                await driveService.Files.Delete(remoteItem.Id).ExecuteAsync(cancellationToken);
+                return;
+            }
+
+            if (item.Moved)
+            {
+                var remoteItem = await FindByLocalPathAsync(driveService, remoteRootId,
+                    localRootPath, item.OriginalLocalPath ?? item.LocalPath, cancellationToken)
+                    ?? throw new FileNotFoundException("Remote item to move was not found.", item.LocalPath);
+                await MoveAsync(driveService, localRootPath, remoteRootId, remoteItem, item.LocalPath, cancellationToken);
+            }
+
+            if (item.Renamed)
+            {
+                var remoteItem = await FindByLocalPathAsync(driveService, remoteRootId,
+                    localRootPath, item.OriginalLocalPath ?? item.LocalPath, cancellationToken)
+                    ?? throw new FileNotFoundException("Remote item to rename was not found.", item.LocalPath);
+                await RenameAsync(driveService, remoteItem.Id, Path.GetFileName(item.LocalPath), cancellationToken);
+            }
+
+            if (item.Changed || item.Created)
+            {
+                if (item.IsFolder)
+                {
+                    await CreateFolderForPathAsync(driveService, localRootPath, remoteRootId, item.LocalPath, cancellationToken);
+                    return;
+                }
+
+                var existing = await FindByLocalPathAsync(driveService, remoteRootId, localRootPath, item.LocalPath, cancellationToken);
+                await UploadAsync(driveService, localRootPath, remoteRootId, item.LocalPath, existing?.Id, cancellationToken);
+            }
+        }
+
+        // Adds a local path to a semicolon-delimited event path list.
+        private static string AppendPath(string current, string path)
+        {
+            if (string.IsNullOrEmpty(current)) return string.Empty;
+
+            return string.IsNullOrEmpty(current) ? path : $"{current};{path}";
+        }
+
+        // Removes a local path from a semicolon-delimited event path list.
+        private static string RemovePath(string current, string path)
+        {
+            if (string.IsNullOrEmpty(current)) return string.Empty;
+            
+            return string.Join(";", current
+                .Split(';', StringSplitOptions.RemoveEmptyEntries)
+                .Where(p => !p.Equals(path, StringComparison.OrdinalIgnoreCase)));
+        }
+
+        // Resolves a local path beneath the watched folder to its current Drive item.
+        private async Task<Google.Apis.Drive.v3.Data.File?> FindByLocalPathAsync(
+            DriveService driveService,
+            string remoteRootId,
+            string localRootPath,
+            string localPath,
+            CancellationToken cancellationToken)
+        {
+            string relativePath = Path.GetRelativePath(localRootPath, localPath);
+            if (relativePath == ".") return null;
+
+            string parentId = remoteRootId;
+            Google.Apis.Drive.v3.Data.File? current = null;
+            string[] segments = relativePath.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                .Where(segment => !string.IsNullOrWhiteSpace(segment) && segment != ".")
+                .ToArray();
+            // iteratively searches through the folders and files using the path segments
+            // throws if there is an ambiguous naming - multiple files/folders with the same name (impossible in this case to differentiate)
+            for (int index = 0; index < segments.Length; index++)
+            {
+                string segment = segments[index];
+                bool isFinalSegment = index == segments.Length - 1;
+                var matchingItems = await FindChildrenByNameAsync(
+                    driveService, parentId, segment, allowFiles: isFinalSegment, cancellationToken);
+                if (matchingItems.Count == 0) return null;
+                if (matchingItems.Count > 1)
+                {
+                    throw new InvalidOperationException(
+                        $"The remote path '{localPath}' is ambiguous: multiple items named '{segment}' exist under the same folder.");
+                }
+
+                current = matchingItems[0];
+                parentId = current.Id;
+            }
+
+            return current;
+        }
+
+        // Finds non-trashed Drive children with an exact name under a parent.
+        private static async Task<IList<Google.Apis.Drive.v3.Data.File>> FindChildrenByNameAsync(
+            DriveService driveService,
+            string parentId,
+            string name,
+            bool allowFiles,
+            CancellationToken cancellationToken)
+        {
+            string escapedName = name.Replace("'", "\\'");
+            var request = driveService.Files.List();
+            // uses Google Drive API queries to search for specific matching item
+            request.Q = $"'{parentId}' in parents and name = '{escapedName}' and trashed = false";
+            if (!allowFiles)
+            {
+                request.Q += " and mimeType = 'application/vnd.google-apps.folder'";
+            }
+            request.Spaces = "drive";
+            request.Fields = "files(id,name,mimeType,parents)";
+            return (await request.ExecuteAsync(cancellationToken)).Files;
+        }
+
+        // Moves a resolved Drive item to the folder represented by its destination path.
+        private async Task MoveAsync(
+            DriveService driveService,
+            string localRootPath,
+            string remoteRootId,
+            Google.Apis.Drive.v3.Data.File remoteItem,
+            string destinationPath,
+            CancellationToken cancellationToken)
+        {
+            string destinationParentPath = Path.GetDirectoryName(destinationPath) ?? localRootPath;
+
+            // Ensure the destination folder and any missing ancestor folders exist.
+            await CreateFolderForPathAsync(driveService, localRootPath, remoteRootId,
+                destinationParentPath, cancellationToken);
+
+            var destinationParent = await FindByLocalPathAsync(driveService, remoteRootId, localRootPath,
+                destinationParentPath, cancellationToken)
+                ?? throw new DirectoryNotFoundException("Remote destination folder was not found.");
+            string? oldParent = remoteItem.Parents?.SingleOrDefault();
+            var request = driveService.Files.Update(new Google.Apis.Drive.v3.Data.File(), remoteItem.Id);
+            request.AddParents = destinationParent.Id;
+            request.RemoveParents = oldParent;
+            await request.ExecuteAsync(cancellationToken);
+        }
+
+        // Changes the name of a resolved Drive item.
+        private static async Task RenameAsync(
+            DriveService driveService,
+            string remoteId,
+            string newName,
+            CancellationToken cancellationToken)
+        {
+            // 
+            await driveService.Files.Update(
+                new Google.Apis.Drive.v3.Data.File { Name = newName }, remoteId)
+                .ExecuteAsync(cancellationToken);
+        }
+
+        // Creates each missing folder in a local path beneath the remote root.
+        private async Task CreateFolderForPathAsync(
+            DriveService driveService,
+            string localRootPath,
+            string remoteRootId,
+            string localPath,
+            CancellationToken cancellationToken)
+        {
+            string relativePath = Path.GetRelativePath(localRootPath, localPath);
+            string parentId = remoteRootId;
+            foreach (string segment in relativePath.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))
+            {
+                if (string.IsNullOrWhiteSpace(segment) || segment == ".") continue;
+                var matches = await FindChildrenByNameAsync(driveService, parentId, segment, false, cancellationToken);
+                if (matches.Count > 1) throw new InvalidOperationException($"Multiple remote folders match '{localPath}'.");
+                if (matches.Count == 1)
+                {
+                    parentId = matches[0].Id;
+                    continue;
+                }
+
+                var metadata = new Google.Apis.Drive.v3.Data.File
+                {
+                    Name = segment,
+                    MimeType = "application/vnd.google-apps.folder",
+                    Parents = new List<string> { parentId }
+                };
+                var created = await driveService.Files.Create(metadata).ExecuteAsync(cancellationToken);
+                parentId = created.Id;
+            }
+        }
+
+        // Creates or replaces a Drive file using the local file contents.
+        private async Task UploadAsync(
+            DriveService driveService,
+            string localRootPath,
+            string remoteRootId,
+            string localPath,
+            string? existingId,
+            CancellationToken cancellationToken)
+        {
+            string parentPath = Path.GetDirectoryName(localPath) ?? localRootPath;
+            var parent = await FindByLocalPathAsync(driveService, remoteRootId, localRootPath,
+                parentPath, cancellationToken);
+            string parentId = parent?.Id ?? remoteRootId;
+            var metadata = new Google.Apis.Drive.v3.Data.File { Name = Path.GetFileName(localPath) };
+            if (existingId == null) metadata.Parents = new List<string> { parentId };
+
+            await using var stream = File.OpenRead(localPath);
+            IUploadProgress progress;
+            if (existingId == null)
+            {
+                var request = driveService.Files.Create(metadata, stream, "application/octet-stream");
+                progress = await request.UploadAsync(cancellationToken);
+            }
+            else
+            {
+                var request = driveService.Files.Update(metadata, existingId, stream, "application/octet-stream");
+                progress = await request.UploadAsync(cancellationToken);
+            }
+
+            if (progress.Status == UploadStatus.Failed)
+                throw progress.Exception ?? new IOException("Google Drive upload failed.");
+        }
+        // Builds a short-lived Drive client authenticated with the supplied access token.
         private DriveService BuildDriveClient(string currentAccessToken)
         {
             var credential = GoogleCredential.FromAccessToken(currentAccessToken);
@@ -65,18 +368,16 @@ namespace StorageStandby.Backend.Services
                 HttpClientInitializer = credential,
                 ApplicationName = "StorageStandby"
             });
-
-            // Build a short-lived client context right here
-            // 401 Unauthorized error if access token expired
-            using var driveService = BuildDriveClient(currentAccessToken);
         }
 
+        // Gets the remaining storage quota for the authenticated Drive account.
         public async Task GetRemainingStorageQuotaAsync()
         {
             // Implement logic to get remaining storage quota from Google Drive API
             throw new NotImplementedException();
         }
 
+        // Creates one folder in Drive, optionally beneath the supplied parent.
         public async Task<string> CreateFolderAsync(DriveService driveService, string currentAccessToken, string folderName, string parentId = null)
         {
             var folderMetadata = new Google.Apis.Drive.v3.Data.File
@@ -92,14 +393,12 @@ namespace StorageStandby.Backend.Services
 
             var request = driveService.Files.Create(folderMetadata);
             request.Fields = "id";
-            
+
             var folder = await request.ExecuteAsync();
             return folder.Id;
         }
 
-        /// <summary>
-        /// Uploads a single file using the exact access token provided at execution time.
-        /// </summary>
+        // Uploads one local file as a new Drive file using the supplied access token.
         public async Task<string> UploadSingleFileAsync(string currentAccessToken, string localPath, string remoteName, string parentId = null)
         {
             using var driveService = BuildDriveClient(currentAccessToken);
@@ -128,38 +427,6 @@ namespace StorageStandby.Backend.Services
 
                 return request.ResponseBody?.Id;
             }
-        }
-    
-
-        public async Task RenameFileAsync(string localFilePath)
-        {
-            
-        }
-
-        public async Task UploadFileAsync(string localFilePath, string remoteFolderPath)
-        {
-            // TODO: Implement Google's Resumable Upload session for large files
-            // 1. Read file as a stream
-            // 2. Push to Google Drive API
-
-            // Implement logic to upload file to Google Drive using Google Drive API
-            throw new NotImplementedException();
-
-        }
-
-        public async Task DeleteFileAsync(string localFilePath, string remoteFolderPath)
-        {
-            
-        }
-
-        public async Task CreateFolderAsync()
-        {
-            
-        }
-
-        public async Task DeleteFolderAsync()
-        {
-            
         }
 
         // ----------------------------------------------------------
@@ -212,7 +479,7 @@ namespace StorageStandby.Backend.Services
 
             // Build authorization URL requesting offline access (gives us a refresh token)
             string scope = Uri.EscapeDataString(
-                "https://www.googleapis.com/auth/drive.file " + 
+                "https://www.googleapis.com/auth/drive.file " +
                 "https://www.googleapis.com/auth/drive.activity " +
                 "https://www.googleapis.com/auth/userinfo.email " +
                 "https://www.googleapis.com/auth/userinfo.profile " +
@@ -239,7 +506,8 @@ namespace StorageStandby.Backend.Services
             try
             {
                 listener.Start();
-            } catch (HttpListenerException ex)
+            }
+            catch (HttpListenerException ex)
             {
                 return new AuthResult
                 {
@@ -289,9 +557,9 @@ namespace StorageStandby.Backend.Services
                     context.Response.OutputStream.Write(errBytes, 0, errBytes.Length);
                     context.Response.Close();
                     return new AuthResult
-                    { 
-                        Success = false, 
-                        Message = $"Google OAuth error: {error ?? "No code returned"}" 
+                    {
+                        Success = false,
+                        Message = $"Google OAuth error: {error ?? "No code returned"}"
                     };
                 }
 
@@ -401,10 +669,10 @@ namespace StorageStandby.Backend.Services
                     // 6. Persist to SQLite and update live memory state
                     await _tokenManager.SaveRefreshTokenAsync(Providers.Google, encryptedRefreshToken, accountId, email, name);
 
-                    return new AuthResult 
-                    { 
-                        Success = true, 
-                        Message = "Google Drive OAuth connection success." 
+                    return new AuthResult
+                    {
+                        Success = true,
+                        Message = "Google Drive OAuth connection success."
                     };
                 }
                 // 6.5 id_token is missing
@@ -420,10 +688,10 @@ namespace StorageStandby.Backend.Services
             }
             catch (Exception ex)
             {
-                return new AuthResult 
-                { 
-                    Success = false, 
-                    Message = "Authentication failed: " + ex.Message 
+                return new AuthResult
+                {
+                    Success = false,
+                    Message = "Authentication failed: " + ex.Message
                 };
             }
             finally
@@ -435,13 +703,14 @@ namespace StorageStandby.Backend.Services
         private int GetAvailablePort(int preferredPort)
         {
             // try preferred port first
-            if (IsPortAvailable(preferredPort)) {
+            if (IsPortAvailable(preferredPort))
+            {
                 return preferredPort;
             }
             // find any available port
             using (var socket = new System.Net.Sockets.Socket(
-                System.Net.Sockets.AddressFamily.InterNetwork, 
-                System.Net.Sockets.SocketType.Stream, 
+                System.Net.Sockets.AddressFamily.InterNetwork,
+                System.Net.Sockets.SocketType.Stream,
                 System.Net.Sockets.ProtocolType.Tcp))
             {
                 socket.Bind(new System.Net.IPEndPoint(System.Net.IPAddress.Loopback, 0)); // Bind to any available port
@@ -481,7 +750,8 @@ namespace StorageStandby.Backend.Services
                     socket.Bind(new System.Net.IPEndPoint(System.Net.IPAddress.Loopback, port));
                     return true;
                 }
-            } catch
+            }
+            catch
             {
                 return false;
             }
@@ -493,23 +763,26 @@ namespace StorageStandby.Backend.Services
             // 1. Get refresh token from SQLite + decrypt it using Windows DPAPI
             CloudToken token = await _tokenManager.GetRefreshTokenAsync(Providers.Google, accountId);
             string unencryptedToken = string.Empty;
-            if (token is not null) {
+            if (token is not null)
+            {
                 unencryptedToken = _dataProtector.CreateProtector("GoogleTokenProtector").Unprotect(token.EncryptedRefreshToken);
-            } else { 
+            }
+            else
+            {
                 return new AuthResult
                 {
                     Success = false,
                     Message = "No refresh token found."
                 };
             }
-  
+
             // 2. POST to Google revocation endpoint 
             var tokenRequestParams = new Dictionary<string, string>
                 {
                     { "token",  unencryptedToken},
                 };
             var tokenRequestContent = new FormUrlEncodedContent(tokenRequestParams); // form-urlencoded data
-                                                                     
+
             var tokenResponse = await _httpClient.PostAsync("https://oauth2.googleapis.com/revoke", tokenRequestContent);
 
             if (tokenResponse.IsSuccessStatusCode)

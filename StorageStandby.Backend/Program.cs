@@ -32,7 +32,7 @@ builder.WebHost.ConfigureKestrel(options =>
 builder.Services.AddSingleton<BackupEngineState>();
 builder.Services.AddSingleton<TokenManager>();
 builder.Services.AddSingleton<LocalFileSystemService>();
-builder.Services.AddSingleton<SyncManager>();
+builder.Services.AddSingleton<SyncManagerService>();
 builder.Services.AddSingleton<WatchedFolderService>();
 // .NET automatically registers IServiceScopeFactory as a Singleton infrastructure service behind the scenes as soon as the service collection is created -- no need to declare!
 builder.Services.AddDbContext<AppDbContext>(options =>

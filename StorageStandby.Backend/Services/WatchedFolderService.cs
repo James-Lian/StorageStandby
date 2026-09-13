@@ -29,7 +29,7 @@ namespace StorageStandby.Backend.Services
             return null;
         }
 
-        public WatchedFolder GetWatchedFolderFromPath(string path) {
+        public WatchedFolder? GetWatchedFolderFromPath(string path) {
             using var scope = _scopeFactory.CreateScope();
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
@@ -77,7 +77,7 @@ namespace StorageStandby.Backend.Services
             ArgumentNullException.ThrowIfNull(oldIgnoreRules);
             ArgumentNullException.ThrowIfNull(newIgnoreRules);
 
-            WatchedFolder folder = GetWatchedFolderFromId(watchedFolderId);
+            WatchedFolder? folder = GetWatchedFolderFromId(watchedFolderId);
             if (folder is null || string.IsNullOrWhiteSpace(folder.LocalPath))
             {
                 throw new InvalidOperationException($"Watched folder id does not exist: {watchedFolderId}");

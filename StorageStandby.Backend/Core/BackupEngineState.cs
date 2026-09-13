@@ -73,7 +73,6 @@ namespace StorageStandby.Backend.Core
         //    { Providers.Dropbox, ConnectionStatus.Unconnected },
         //    { Providers.pDrive, ConnectionStatus.Unconnected }
         //};
- 
 
         public string CurrentOperation { get; set; } = "Idle";
         public string LastSyncedFile { get; set; } = "None";

@@ -95,6 +95,7 @@ namespace StorageStandby.Backend.Services
 
         // ------------------------------------------------------------------------------------------------------------
         // Ignore Rules-Related Methods (see WatchedFolder and FileSystemWatcherWorker)
+        // https://code.visualstudio.com/docs/editor/glob-patterns
         public bool IsFileIgnored(string ignoreRulesGlob, string path) // glob pattern reader
         {
             ArgumentNullException.ThrowIfNull(ignoreRulesGlob);
