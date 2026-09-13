@@ -70,6 +70,8 @@ namespace StorageStandby.Backend.Workers
             _logger.LogInformation("FileSystemWatcherWorker starting up.");
             _stoppingToken = stoppingToken;
 
+            await StartupLogic(stoppingToken);
+
             try
             {
                 while (!stoppingToken.IsCancellationRequested)
@@ -92,6 +94,21 @@ namespace StorageStandby.Backend.Workers
 
                 _activeWatchers.Clear();
             }
+        }
+
+        // reconciling any interrupted SyncQueues
+        private async Task StartupLogic(CancellationToken stoppingToken)
+        {
+            await using var scope = _scopeFactory.CreateAsyncScope();
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+
+            var lastEvent = await db.SyncEvents.LastOrDefaultAsync(stoppingToken);
+            if (lastEvent?.CompletionType == SyncEventType.InProgress)
+            {
+                lastEvent.CompletionType = SyncEventType.Interrupted;
+            }
+
+            _ = await db.SaveChangesAsync(stoppingToken);
         }
 
         private async Task SyncWatchersFromDatabaseAsync(

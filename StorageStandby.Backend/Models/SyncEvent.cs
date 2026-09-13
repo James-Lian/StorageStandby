@@ -25,27 +25,16 @@ namespace StorageStandby.Backend.Models
 
         // ----------------------------------------------------------
         // Sync Event information
-        public string SyncedItems { get; set; } = string.Empty; // semicolon delimited - files
-        public string FailedItems { get; set; } = string.Empty;
-        public string UnfinishedItems { get; set; } = string.Empty;
         public Providers Provider { get; set; }
         public string AccountId { get; set; }
+        public string SyncedItems { get; set; } = string.Empty; // semicolon delimited - files
+        public List<FailedItemsDetails> FailedItems { get; set; } = [];
+        public string UnfinishedItems { get; set; } = string.Empty;
+    }
 
-        public string MetadataJson { get; set; } = "{}";
-
-        public string? Details { get; set; } = null;
-
-        // ----------------------------------------------------------
-        // 
-        public void SetMetadata(Dictionary<string, string> metadata)
-        {
-            MetadataJson = JsonSerializer.Serialize(metadata);
-        }
-
-        public Dictionary<string, string>? GetMetadata()
-        {
-            if (string.IsNullOrWhiteSpace(MetadataJson)) return new Dictionary<string, string>();
-            return JsonSerializer.Deserialize<Dictionary<string, string>>(MetadataJson);
-        }
+    public class FailedItemsDetails
+    {
+        public string FailedItem { get; set; } = string.Empty;
+        public string Details { get; set; } = string.Empty;
     }
 }

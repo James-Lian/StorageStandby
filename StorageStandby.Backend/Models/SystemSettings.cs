@@ -38,6 +38,7 @@ namespace StorageStandby.Backend.Models
         public List<SyncEvent> SyncEvents { get; set; } = new List<SyncEvent> { }; // might not be all... ?
 
         public SyncFrequency SyncFrequency { get; set; } = new SyncFrequency();
+        public bool AutomaticSyncs { get; set; } = true;
 
         // ----------------------------------------------------------
         // API Settings

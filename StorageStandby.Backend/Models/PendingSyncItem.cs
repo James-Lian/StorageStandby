@@ -23,7 +23,6 @@ namespace StorageStandby.Backend.Models
         
         // -----------------------------------------------------------------
         // EventTypes - cascading (stop at first true prop)
-        // TODO: Check parent folder deletion. If deleted, fuck that. 
         public bool Deleted { get; set; } = false; // first check - if deleted, no need to check other eventtypes (validity checks to see if it was created in a previous sync)
         public bool Moved { get; set; } = false; // second check - if not created before, create at new location
         public string? OriginalLocalPath { get; set; } = null;
