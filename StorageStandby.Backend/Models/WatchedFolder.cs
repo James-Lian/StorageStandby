@@ -33,7 +33,7 @@
 
         // ---------------------------------------------------------------
         // Cloud/Provider Information
-        public List<WatchedFolderCloudMetadata> AssignedClouds { get; set; } = new();
+        public List<WatchedFolderCloudMetadata> AssignedClouds { get; set; } = [];
 
         // ---------------------------------------------------------------
         // Folder/File specific settings
@@ -46,7 +46,7 @@
         public string SnapshotUrls { get; set; } = string.Empty; // semicolon delimited list of URLs to snapshot locations (if any)
 
         public Providers? PreferredProvider { get; set; } = null;
-        public ProblematicFolderType? Problem { get; set; } // Configuration problem - NOT SYNC EVENT PROBLEM
+        public ProblematicFolderType Problem { get; set; } = ProblematicFolderType.None; // Configuration problem - NOT SYNC EVENT PROBLEM
 
         // ---------------------------------------------------------------
         // Sync state information
@@ -60,12 +60,13 @@
         public long Id { get; set; }
         public Providers Provider { get; set; }
         public string AccountId { get; set; }
+
+        // TODO: shit I gotta create a method to reconcile this
         public string RemoteFolderId { get; set; }
 
         // Foreign key to link back to the WatchedFolder in EF Core
         // Fully Defined Relationship - object reference + id
         public long WatchedFolderId { get; set; }
-        public WatchedFolder WatchedFolder { get; set; }
         // maybe: saving a config file in the cloud as well??
         public string ConfigFileId { get; set; }
     }

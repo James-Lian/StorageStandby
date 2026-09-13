@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using StorageStandby.Backend.Models;
 
 namespace StorageStandby.Backend.Services
 {
@@ -41,6 +42,27 @@ namespace StorageStandby.Backend.Services
 
             return Directory.EnumerateFiles(folderPath, "*", SearchOption.AllDirectories)
                 .Sum(filePath => new FileInfo(filePath).Length);
+        }
+
+        // Returns the total size of all files beneath a watched folder, in bytes.
+        public long GetWatchedFolderSize(
+            WatchedFolder watchedFolder,
+            CancellationToken cancellationToken = default)
+        {
+            ArgumentNullException.ThrowIfNull(watchedFolder);
+            ArgumentException.ThrowIfNullOrWhiteSpace(watchedFolder.LocalPath);
+
+            long totalBytes = 0;
+            foreach (string filePath in Directory.EnumerateFiles(
+                watchedFolder.LocalPath,
+                "*",
+                SearchOption.AllDirectories))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                totalBytes = checked(totalBytes + new FileInfo(filePath).Length);
+            }
+
+            return totalBytes;
         }
 
         public long GetFileSize(string filePath)

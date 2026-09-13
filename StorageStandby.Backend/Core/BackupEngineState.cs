@@ -83,24 +83,12 @@ namespace StorageStandby.Backend.Core
         // in-memory list of active paths, loaded from DB on boot
         public List<string> ActiveWatchedPaths { get; set; } = new();
 
-        //trigger to tell the background worker a new folder was added
-        public event Action<WatchedFolder>? OnNewFolderAdded;
-
 
         // ----------------------------------------------------------------------
         // Sync-related members
 
         // stored in memory: rebuilt on reboot
         public List<string> PendingSyncItems { get; set; } = new();
-
-        public void NotifyNewFolderAdded(string path)
-        {
-            if (!ActiveWatchedPaths.Contains(path))
-            {
-                ActiveWatchedPaths.Add(path);
-                OnNewFolderAdded?.Invoke(_watchedFolderService.GetWatchedFolderFromPath(path));
-            }
-        }
 
         public bool IsSafeToSync()
         {

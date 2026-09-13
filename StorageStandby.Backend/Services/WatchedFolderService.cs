@@ -8,16 +8,115 @@ namespace StorageStandby.Backend.Services
     public class WatchedFolderService
     {
         readonly IServiceScopeFactory _scopeFactory;
-        readonly LocalFileSystemService _fileSystem; 
-        public WatchedFolderService (
+        readonly LocalFileSystemService _fileSystem;
+        public WatchedFolderService(
             IServiceScopeFactory scopeFactory,
             LocalFileSystemService fileSystem
-        ) {
+        )
+        {
             _scopeFactory = scopeFactory;
             _fileSystem = fileSystem;
         }
 
-        public long? GetWatchedFolderIdFromPath(string path) {
+        // ----------------------------------------------------------------------------------------------------
+        // Local-Adjacent Methods
+        // TODO: I don't like this CreateWatchedFolderResult enum and will probably replace it
+        public enum CreateWatchedFolderResultStatus
+        {
+            Success,
+            Failure,
+            AlreadyExists
+        }
+        public class CreateWatchedFolderResultDto
+        {
+            public CreateWatchedFolderResultStatus Status { get; set; }
+            public string? Details { get; set; }
+        }
+        public async Task<CreateWatchedFolderResultDto> CreateWatchedFolder(string path)
+        {
+            await using var scope = _scopeFactory.CreateAsyncScope();
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+
+            try
+            {
+                bool exists = await db.WatchedFolders.AnyAsync(f => f.LocalPath == path);
+
+                if (exists)
+                {
+                    return new CreateWatchedFolderResultDto
+                    {
+                        Status = CreateWatchedFolderResultStatus.AlreadyExists,
+                    };
+                }
+
+                db.WatchedFolders.Add(new WatchedFolder
+                {
+                    LocalPath = path,
+                    DateAdded = DateTime.UtcNow,
+                });
+            }
+            catch (Exception ex)
+            {
+                return new CreateWatchedFolderResultDto
+                {
+                    Status = CreateWatchedFolderResultStatus.Failure,
+                    Details = ex.Message
+                };
+            }
+
+            _ = await db.SaveChangesAsync();
+
+            return new CreateWatchedFolderResultDto
+            {
+                Status = CreateWatchedFolderResultStatus.Success,
+            };
+        }
+
+        public async Task DeleteWatchedFolder(string path)
+        {
+            await using var scope = _scopeFactory.CreateAsyncScope();
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+
+            var folder = await db.WatchedFolders
+                .SingleOrDefaultAsync(watchedFolder => watchedFolder.LocalPath == path);
+            if (folder is null)
+            {
+                return;
+            }
+
+            var pendingItems = await db.PendingSyncQueue
+                .Where(item => item.WatchedFolderId == folder.Id)
+                .ToListAsync();
+            var syncEvents = await db.SyncEvents
+                .Where(syncEvent => syncEvent.WatchedFolderId == folder.Id)
+                .ToListAsync();
+            db.PendingSyncQueue.RemoveRange(pendingItems);
+            db.WatchedFolders.Remove(folder);
+
+            await db.SaveChangesAsync();
+        }
+
+        public async Task SetProblemAsync(
+            long watchedFolderId,
+            ProblematicFolderType problem,
+            CancellationToken cancellationToken = default)
+        {
+            await using var scope = _scopeFactory.CreateAsyncScope();
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+
+            var folder = await db.WatchedFolders
+                .SingleOrDefaultAsync(item => item.Id == watchedFolderId, cancellationToken);
+            if (folder is null)
+            {
+                return;
+            }
+
+            folder.Problem = problem;
+            await db.SaveChangesAsync(cancellationToken);
+        }
+
+        public long? GetWatchedFolderIdFromPath(string path)
+        {
             using var scope = _scopeFactory.CreateScope();
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
@@ -29,7 +128,8 @@ namespace StorageStandby.Backend.Services
             return null;
         }
 
-        public WatchedFolder? GetWatchedFolderFromPath(string path) {
+        public WatchedFolder? GetWatchedFolderFromPath(string path)
+        {
             using var scope = _scopeFactory.CreateScope();
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 

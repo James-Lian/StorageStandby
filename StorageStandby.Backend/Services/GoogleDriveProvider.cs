@@ -48,16 +48,8 @@ namespace StorageStandby.Backend.Services
             _tokenManager = tokenManager;
         }
 
-        public sealed class GoogleSyncResult
-        {
-            public SyncEventType Status { get; init; }
-            public int Succeeded { get; init; }
-            public int Failed { get; init; }
-            public int Unfinished { get; init; }
-        }
-
         // The items to be synced are passed into this function
-        public async Task<GoogleSyncResult> ExecuteSyncQueueAsync(
+        public async Task<SyncResult> ExecuteSyncQueueAsync(
             SyncEvent syncEvent, // pre-created and passed in
             string currentAccessToken, // accessToken for API services
             IReadOnlyList<PendingSyncItem> queue, // queue to be persisted
@@ -86,7 +78,9 @@ namespace StorageStandby.Backend.Services
             await _db.SaveChangesAsync(cancellationToken);
 
             // success counters
-            int initialCount = syncEvent.UnfinishedItems.Count();
+            int initialCount = syncEvent.UnfinishedItems
+                .Split(';', StringSplitOptions.RemoveEmptyEntries)
+                .Length;
             int succeeded = 0;
             int failed = 0;
 
@@ -99,7 +93,7 @@ namespace StorageStandby.Backend.Services
                     await ExecuteItemAsync(driveService, watchedFolder.LocalPath!, cloud.RemoteFolderId, item, cancellationToken);
                     succeeded++;
                     syncEvent.SyncedItems = AppendPath(syncEvent.SyncedItems, item.LocalPath);
-                    syncEvent.UnfinishedItems = RemovePath(syncEvent.SyncedItems, item.LocalPath);
+                    syncEvent.UnfinishedItems = RemovePath(syncEvent.UnfinishedItems, item.LocalPath);
                 }
                 catch (OperationCanceledException)
                 {
@@ -125,7 +119,7 @@ namespace StorageStandby.Backend.Services
             syncEvent.CompletedTimestamp = DateTime.UtcNow;
             await _db.SaveChangesAsync(cancellationToken);
 
-            return new GoogleSyncResult
+            return new SyncResult
             {
                 Status = syncEvent.CompletionType,
                 Succeeded = succeeded,
@@ -146,7 +140,7 @@ namespace StorageStandby.Backend.Services
                 var remoteItem = await FindByLocalPathAsync(driveService, remoteRootId,
                     localRootPath, item.OriginalLocalPath ?? item.LocalPath, cancellationToken)
                     ?? throw new FileNotFoundException("Remote item to delete was not found.", item.LocalPath);
-                await driveService.Files.Delete(remoteItem.Id).ExecuteAsync(cancellationToken);
+                await DeleteAsync(driveService, remoteItem, cancellationToken);
                 return;
             }
 
@@ -256,6 +250,15 @@ namespace StorageStandby.Backend.Services
             return (await request.ExecuteAsync(cancellationToken)).Files;
         }
 
+        // Deletes a Drive item 
+        private async Task DeleteAsync(
+            DriveService driveService,
+            Google.Apis.Drive.v3.Data.File remoteItem,
+            CancellationToken cancellationToken)
+        {
+            await driveService.Files.Delete(remoteItem.Id).ExecuteAsync(cancellationToken);
+        }
+
         // Moves a resolved Drive item to the folder represented by its destination path.
         private async Task MoveAsync(
             DriveService driveService,
@@ -358,6 +361,7 @@ namespace StorageStandby.Backend.Services
             if (progress.Status == UploadStatus.Failed)
                 throw progress.Exception ?? new IOException("Google Drive upload failed.");
         }
+
         // Builds a short-lived Drive client authenticated with the supplied access token.
         private DriveService BuildDriveClient(string currentAccessToken)
         {
@@ -371,10 +375,108 @@ namespace StorageStandby.Backend.Services
         }
 
         // Gets the remaining storage quota for the authenticated Drive account.
-        public async Task GetRemainingStorageQuotaAsync()
+        public async Task<long> GetRemainingStorageQuotaAsync(
+            string accountId,
+            CancellationToken cancellationToken = default)
         {
-            // Implement logic to get remaining storage quota from Google Drive API
-            throw new NotImplementedException();
+            ArgumentException.ThrowIfNullOrWhiteSpace(accountId);
+
+            string accessToken = await _tokenManager.GetValidAccessTokenAsync(
+                Providers.Google,
+                accountId);
+            using var driveService = BuildDriveClient(accessToken);
+            var about = await driveService.About.Get().ExecuteAsync(cancellationToken);
+
+            long limit = about.StorageQuota?.Limit ?? 0;
+            long usage = about.StorageQuota?.Usage ?? 0;
+            return Math.Max(0, limit - usage);
+        }
+
+        public async Task<string> CreateRemoteRootFolderAsync(
+            string accountId,
+            string folderName,
+            CancellationToken cancellationToken = default)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(accountId);
+            ArgumentException.ThrowIfNullOrWhiteSpace(folderName);
+
+            string accessToken = await _tokenManager.GetValidAccessTokenAsync(
+                Providers.Google,
+                accountId);
+            using var driveService = BuildDriveClient(accessToken);
+            var metadata = new Google.Apis.Drive.v3.Data.File
+            {
+                Name = folderName,
+                MimeType = "application/vnd.google-apps.folder"
+            };
+            var request = driveService.Files.Create(metadata);
+            request.Fields = "id";
+            var folder = await request.ExecuteAsync(cancellationToken);
+            return folder.Id;
+        }
+
+        public async Task<bool> RemoteFolderExistsAsync(
+            string accountId,
+            string remoteFolderId,
+            CancellationToken cancellationToken = default)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(accountId);
+            ArgumentException.ThrowIfNullOrWhiteSpace(remoteFolderId);
+
+            string accessToken = await _tokenManager.GetValidAccessTokenAsync(
+                Providers.Google,
+                accountId);
+            using var driveService = BuildDriveClient(accessToken);
+
+            try
+            {
+                var request = driveService.Files.Get(remoteFolderId);
+                request.Fields = "id,mimeType,trashed";
+                var remoteFolder = await request.ExecuteAsync(cancellationToken);
+                return remoteFolder.Trashed != true
+                    && remoteFolder.MimeType == "application/vnd.google-apps.folder";
+            }
+            catch (GoogleApiException ex) when (ex.HttpStatusCode == HttpStatusCode.NotFound)
+            {
+                return false;
+            }
+        }
+
+        public async Task DeleteRemoteRootFolderAsync(
+            string accountId,
+            string remoteFolderId,
+            CancellationToken cancellationToken = default)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(accountId);
+            ArgumentException.ThrowIfNullOrWhiteSpace(remoteFolderId);
+
+            string accessToken = await _tokenManager.GetValidAccessTokenAsync(
+                Providers.Google,
+                accountId);
+            using var driveService = BuildDriveClient(accessToken);
+
+            try
+            {
+                var getRequest = driveService.Files.Get(remoteFolderId);
+                getRequest.Fields = "id,mimeType,trashed";
+                var remoteFolder = await getRequest.ExecuteAsync(cancellationToken);
+                if (remoteFolder.Trashed == true)
+                {
+                    return;
+                }
+
+                if (remoteFolder.MimeType != "application/vnd.google-apps.folder")
+                {
+                    throw new InvalidOperationException(
+                        $"Remote ID '{remoteFolderId}' does not refer to a Google Drive folder.");
+                }
+
+                await driveService.Files.Delete(remoteFolderId).ExecuteAsync(cancellationToken);
+            }
+            catch (GoogleApiException ex) when (ex.HttpStatusCode == HttpStatusCode.NotFound)
+            {
+                // The folder was already deleted or is no longer visible to this account.
+            }
         }
 
         // Creates one folder in Drive, optionally beneath the supplied parent.
