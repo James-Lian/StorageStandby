@@ -10,6 +10,8 @@ using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using Microsoft.Graph;
+using Microsoft.Kiota.Abstractions.Authentication;
 
 namespace StorageStandby.Backend.Services
 {
@@ -23,6 +25,10 @@ namespace StorageStandby.Backend.Services
         private readonly TokenManager _tokenManager;
 
         public string ProviderName => "Microsoft";
+
+        // ----------------------------------------------------------
+        // SYNC AND UPLOAD METHODS
+        // ----------------------------------------------------------
 
         public OneDriveProvider(
             AppDbContext db,
@@ -38,28 +44,72 @@ namespace StorageStandby.Backend.Services
             _tokenManager = tokenManager;
         }
 
-        public sealed class StorageQuotaDto
+        private GraphServiceClient BuildDriveClient(string accessToken)
         {
-            public long TotalBytes { get; init; }
-            public long UsedBytes { get; init; }
-            public long RemainingBytes => TotalBytes - UsedBytes;
+            var tokenProvider = new StaticAccessTokenProvider(accessToken);
+            var authProvider = new BaseBearerTokenAuthenticationProvider(tokenProvider);
+            return new GraphServiceClient(authProvider);
         }
 
-        public async Task<StorageQuotaDto> GetRemainingStorageQuotaAsync(string accountId)
+        private sealed class StaticAccessTokenProvider : IAccessTokenProvider
         {
-            string accessToken = await _tokenManager.GetValidAccessTokenAsync(Providers.Microsoft, accountId);
-            using var request = CreateGraphRequest(HttpMethod.Get, "/me/drive?$select=quota", accessToken);
-            using var response = await _httpClient.SendAsync(request);
-            await EnsureSuccessAsync(response);
+            private readonly string _accessToken;
 
-            using var document = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync());
-            JsonElement quota = document.RootElement.GetProperty("quota");
-
-            return new StorageQuotaDto
+            public StaticAccessTokenProvider(string accessToken)
             {
-                TotalBytes = quota.GetProperty("total").GetInt64(),
-                UsedBytes = quota.GetProperty("used").GetInt64()
-            };
+                _accessToken = accessToken;
+                AllowedHostsValidator = new AllowedHostsValidator(
+                    new[] { "graph.microsoft.com" });
+            }
+
+            public AllowedHostsValidator AllowedHostsValidator { get; }
+
+            public Task<string> GetAuthorizationTokenAsync(
+                Uri uri,
+                Dictionary<string, object>? additionalAuthenticationContext = null,
+                CancellationToken cancellationToken = default)
+            {
+                return Task.FromResult(_accessToken);
+            }
+        }
+
+
+        // TODO: fix accessToken expiration <-- double check
+        public async Task<SyncResult> ExecuteSyncQueueAsync(
+            SyncEvent syncEvent, // pre-created and passed in
+            string currentAccessToken, // accessToken for API services
+            IReadOnlyList<PendingSyncItem> queue, // queue to be persisted
+            CancellationToken cancellationToken = default)
+        {
+            ArgumentNullException.ThrowIfNull(syncEvent);
+            ArgumentException.ThrowIfNullOrEmpty(currentAccessToken);
+            ArgumentNullException.ThrowIfNull(queue);
+            
+            syncEvent.UnfinishedItems = string.Join(";", queue.Select(i => i.LocalPath));
+
+            // automatic garbage cleanup at the end of scope
+            using var driveService = BuildDriveClient(currentAccessToken);
+
+            var watchedFolder = await _db.WatchedFolders
+                .Include(folder => folder.AssignedClouds)
+                .SingleAsync(folder => folder.Id == syncEvent.WatchedFolderId, cancellationToken);
+
+            syncEvent.CompletionType = SyncEventType.InProgress;
+            syncEvent.CompletedTimestamp = null;
+            await _db.SaveChangesAsync(cancellationToken);
+
+            int initialCount = syncEvent
+            return new SyncResult{};
+        }
+
+        public async Task ExecuteItemAsync()
+        {
+            
+        }
+
+        public async Task UploadAsync()
+        {
+            
         }
 
         public async Task UploadFileAsync(
@@ -92,14 +142,29 @@ namespace StorageStandby.Backend.Services
             await EnsureSuccessAsync(response);
         }
 
-        public sealed class ConnectedAccountDto
+        // ----------------------------------------------------------
+        // REST API
+        // ----------------------------------------------------------
+        public async Task<StorageQuotaDto> GetRemainingStorageQuotaAsync(string accountId)
         {
-            public string Id { get; init; } = string.Empty;
-            public ConnectionStatus Status { get; init; }
-            public string? Email { get; init; }
-            public string? Name { get; init; }
+            string accessToken = await _tokenManager.GetValidAccessTokenAsync(Providers.Microsoft, accountId);
+            using var request = CreateGraphRequest(HttpMethod.Get, "/me/drive?$select=quota", accessToken);
+            using var response = await _httpClient.SendAsync(request);
+            await EnsureSuccessAsync(response);
+
+            using var document = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync());
+            JsonElement quota = document.RootElement.GetProperty("quota");
+
+            return new StorageQuotaDto
+            {
+                TotalBytes = quota.GetProperty("total").GetInt64(),
+                UsedBytes = quota.GetProperty("used").GetInt64()
+            };
         }
 
+        // ----------------------------------------------------------
+        // USERS/AUTH/SIGN-IN
+        // ----------------------------------------------------------
         public Task<List<ConnectedAccountDto>> GetConnectedAccounts()
         {
             return _db.CloudTokens
