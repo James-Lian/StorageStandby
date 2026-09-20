@@ -216,15 +216,11 @@ namespace StorageStandby.Backend.Core
             string accountId,
             CancellationToken cancellationToken)
         {
-            string accessToken = await _tokenManager.GetValidAccessTokenAsync(
-                Providers.Google,
-                accountId);
-
             await using var scope = _scopeFactory.CreateAsyncScope();
             var provider = scope.ServiceProvider.GetRequiredService<GoogleDriveProvider>();
             return await provider.ExecuteSyncQueueAsync(
                 syncEvent,
-                accessToken,
+                accountId,
                 queue,
                 cancellationToken);
         }
