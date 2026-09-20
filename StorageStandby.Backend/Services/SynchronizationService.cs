@@ -12,18 +12,28 @@ namespace StorageStandby.Backend.Core
         readonly IServiceScopeFactory _scopeFactory;
         readonly WatchedFolderService _watchedFolderService;
         readonly LocalFileSystemService _fileSystem;
+        readonly TokenManager _tokenManager;
         public SynchronizationService(
             IServiceScopeFactory scopeFactory,
             WatchedFolderService watchedFolderService,
-            LocalFileSystemService fileSystem)
+            LocalFileSystemService fileSystem,
+            TokenManager tokenManager)
         {
             _scopeFactory = scopeFactory;
             _watchedFolderService = watchedFolderService;
             _fileSystem = fileSystem;
+            _tokenManager = tokenManager;
         }
 
         // ----------------------------------------------------------------------------------------------------
         // Sync & Queue Methods
+
+        // TODO:
+        // run on App startup, e.g. on frontend load? Setup function in API?
+        public async Task ReconcileSyncQueueAsync()
+        {
+            
+        }
 
         public async Task ExecuteSyncQueue(CancellationToken cancellationToken = default)
         {
@@ -88,11 +98,16 @@ namespace StorageStandby.Backend.Core
                         SyncResult result = destination.Provider switch
                         {
                             Providers.Google => await ExecuteGoogleSyncAsync(
-                                scope.ServiceProvider,
                                 syncEvent,
                                 queue,
                                 destination.AccountId,
                                 cancellationToken),
+                            Providers.Microsoft => await ExecuteMicrosoftSyncAsync(
+                                syncEvent,
+                                queue,
+                                destination.AccountId,
+                                cancellationToken),
+                            // _ => catch-all
                             _ => throw new NotSupportedException(
                                 $"Queue execution is not implemented for {destination.Provider}.")
                         };
@@ -176,18 +191,37 @@ namespace StorageStandby.Backend.Core
             await db.SaveChangesAsync(cancellationToken);
         }
 
-        private async Task<SyncResult> ExecuteGoogleSyncAsync(
-            IServiceProvider serviceProvider,
+        private async Task<SyncResult> ExecuteMicrosoftSyncAsync(
             SyncEvent syncEvent,
             IReadOnlyList<PendingSyncItem> queue,
             string accountId,
             CancellationToken cancellationToken)
         {
-            var tokenManager = serviceProvider.GetRequiredService<TokenManager>();
-            string accessToken = await tokenManager.GetValidAccessTokenAsync(
+            string accessToken = await _tokenManager.GetValidAccessTokenAsync(
+                Providers.Microsoft,
+                accountId);
+
+            await using var scope = _scopeFactory.CreateAsyncScope();
+            var provider = scope.ServiceProvider.GetRequiredService<OneDriveProvider>();
+            return await provider.ExecuteSyncQueueAsync(
+                syncEvent,
+                accessToken,
+                queue,
+                cancellationToken);
+        }
+
+        private async Task<SyncResult> ExecuteGoogleSyncAsync(
+            SyncEvent syncEvent,
+            IReadOnlyList<PendingSyncItem> queue,
+            string accountId,
+            CancellationToken cancellationToken)
+        {
+            string accessToken = await _tokenManager.GetValidAccessTokenAsync(
                 Providers.Google,
                 accountId);
-            var provider = serviceProvider.GetRequiredService<GoogleDriveProvider>();
+
+            await using var scope = _scopeFactory.CreateAsyncScope();
+            var provider = scope.ServiceProvider.GetRequiredService<GoogleDriveProvider>();
             return await provider.ExecuteSyncQueueAsync(
                 syncEvent,
                 accessToken,

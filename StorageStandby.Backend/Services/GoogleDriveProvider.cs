@@ -14,6 +14,7 @@ using System.Text.Json;
 using System.Threading.Tasks;
 
 using Google.Apis.Auth.OAuth2;
+using Google.Apis.Util.Store;
 using Google.Apis.Drive.v3;
 using Google.Apis.Services;
 using Google.Apis.Upload;
@@ -35,10 +36,9 @@ namespace StorageStandby.Backend.Services
             AppDbContext db,
             BackupEngineState state,
             IDataProtectionProvider dataProtector,
-            IConfiguration configuration,
             HttpClient httpClient,
-            TokenManager tokenManager,
-            DriveService driveService)
+            IConfiguration configuration,
+            TokenManager tokenManager)
         {
             _db = db;
             _state = state;
@@ -48,6 +48,30 @@ namespace StorageStandby.Backend.Services
             _tokenManager = tokenManager;
         }
 
+        private string AuthScope = "https://www.googleapis.com/auth/drive.file " +
+                "https://www.googleapis.com/auth/drive.activity " +
+                "https://www.googleapis.com/auth/userinfo.email " +
+                "https://www.googleapis.com/auth/userinfo.profile " +
+                "openid";
+
+        // ----------------------------------------------------------
+        // SYNC AND UPLOAD METHODS
+        // ----------------------------------------------------------
+
+        // Builds a short-lived Drive client authenticated with the supplied access token.
+        private DriveService BuildDriveClient(string currentAccessToken)
+        {
+
+            var credential = GoogleCredential.FromAccessToken(currentAccessToken);
+
+            return new DriveService(new BaseClientService.Initializer
+            {
+                HttpClientInitializer = credential,
+                ApplicationName = "StorageStandby"
+            });
+        }
+
+        // TODO: fix accessToken expiration <-- double check
         // The items to be synced are passed into this function
         public async Task<SyncResult> ExecuteSyncQueueAsync(
             SyncEvent syncEvent, // pre-created and passed in
@@ -362,36 +386,6 @@ namespace StorageStandby.Backend.Services
                 throw progress.Exception ?? new IOException("Google Drive upload failed.");
         }
 
-        // Builds a short-lived Drive client authenticated with the supplied access token.
-        private DriveService BuildDriveClient(string currentAccessToken)
-        {
-            var credential = GoogleCredential.FromAccessToken(currentAccessToken);
-
-            return new DriveService(new BaseClientService.Initializer
-            {
-                HttpClientInitializer = credential,
-                ApplicationName = "StorageStandby"
-            });
-        }
-
-        // Gets the remaining storage quota for the authenticated Drive account.
-        public async Task<long> GetRemainingStorageQuotaAsync(
-            string accountId,
-            CancellationToken cancellationToken = default)
-        {
-            ArgumentException.ThrowIfNullOrWhiteSpace(accountId);
-
-            string accessToken = await _tokenManager.GetValidAccessTokenAsync(
-                Providers.Google,
-                accountId);
-            using var driveService = BuildDriveClient(accessToken);
-            var about = await driveService.About.Get().ExecuteAsync(cancellationToken);
-
-            long limit = about.StorageQuota?.Limit ?? 0;
-            long usage = about.StorageQuota?.Usage ?? 0;
-            return Math.Max(0, limit - usage);
-        }
-
         public async Task<string> CreateRemoteRootFolderAsync(
             string accountId,
             string folderName,
@@ -532,15 +526,33 @@ namespace StorageStandby.Backend.Services
         }
 
         // ----------------------------------------------------------
+        // REST API
+        // ----------------------------------------------------------
+
+        // Gets the remaining storage quota for the authenticated Drive account.
+        public async Task<StorageQuotaDto> GetRemainingStorageQuotaAsync(
+            string accountId,
+            CancellationToken cancellationToken = default)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(accountId);
+
+            string accessToken = await _tokenManager.GetValidAccessTokenAsync(
+                Providers.Google,
+                accountId);
+            using var driveService = BuildDriveClient(accessToken);
+            var about = await driveService.About.Get().ExecuteAsync(cancellationToken);
+
+            long limit = about.StorageQuota?.Limit ?? 0;
+            long usage = about.StorageQuota?.Usage ?? 0;
+            return new StorageQuotaDto{
+                TotalBytes = limit,
+                UsedBytes = usage,
+            };
+        }
+
+        // ----------------------------------------------------------
         // USERS/AUTH/SIGN-IN
         // ----------------------------------------------------------
-        public class ConnectedAccountDto
-        {
-            public string Id { get; set; }
-            public ConnectionStatus Status { get; set; }
-            public string Email { get; set; }
-            public string Name { get; set; }
-        }
         public async Task<List<ConnectedAccountDto>> GetConnectedAccounts()
         {
             return await _db.CloudTokens
@@ -580,12 +592,7 @@ namespace StorageStandby.Backend.Services
             string state = CreateCodeVerifier();
 
             // Build authorization URL requesting offline access (gives us a refresh token)
-            string scope = Uri.EscapeDataString(
-                "https://www.googleapis.com/auth/drive.file " +
-                "https://www.googleapis.com/auth/drive.activity " +
-                "https://www.googleapis.com/auth/userinfo.email " +
-                "https://www.googleapis.com/auth/userinfo.profile " +
-                "openid");
+            string scope = Uri.EscapeDataString(AuthScope);
             string authUrl = $"https://accounts.google.com/o/oauth2/v2/auth?" +
                 $"client_id={clientId}&" +
                 $"redirect_uri={redirectUri}&" +
