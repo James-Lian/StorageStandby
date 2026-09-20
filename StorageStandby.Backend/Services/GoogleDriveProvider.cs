@@ -14,7 +14,8 @@ using System.Text.Json;
 using System.Threading.Tasks;
 
 using Google.Apis.Auth.OAuth2;
-using Google.Apis.Util.Store;
+using Google.Apis.Auth.OAuth2.Flows;
+using Google.Apis.Auth.OAuth2.Responses;
 using Google.Apis.Drive.v3;
 using Google.Apis.Services;
 using Google.Apis.Upload;
@@ -59,26 +60,71 @@ namespace StorageStandby.Backend.Services
         // ----------------------------------------------------------
 
         // Builds a short-lived Drive client authenticated with the supplied access token.
-        private DriveService BuildDriveClient(string currentAccessToken)
+        // private DriveService BuildDriveClient(string currentAccessToken)
+        // {
+
+        //     var credential = GoogleCredential.FromAccessToken(currentAccessToken);
+
+        //     return new DriveService(new BaseClientService.Initializer
+        //     {
+        //         HttpClientInitializer = credential,
+        //         ApplicationName = "StorageStandby"
+        //     });
+        // }
+
+        private DriveService BuildDriveClient(
+            string currentAccessToken, 
+            string refreshToken, 
+            string userId)
         {
+            // 1. Pack your manually fetched tokens into a TokenResponse object
+            var tokenResponse = new TokenResponse
+            {
+                AccessToken = currentAccessToken,
+                RefreshToken = refreshToken, // Required for auto-refresh
+                ExpiresInSeconds = 3600,
+                IssuedUtc = DateTime.UtcNow
+            };
 
-            var credential = GoogleCredential.FromAccessToken(currentAccessToken);
+            // 2. Initialize the UserCredential with your Client ID and Secret
+            var credential = new UserCredential(
+                new GoogleAuthorizationCodeFlow(new GoogleAuthorizationCodeFlow.Initializer
+                {
+                    ClientSecrets = new ClientSecrets
+                    {
+                        ClientId = _configuration["GoogleOAuth:ClientId"],
+                        ClientSecret = _configuration["GoogleOAuth:ClientSecret"]
+                    }
+                }),
+                userId, // <-- for automatic store management
+                tokenResponse
+            );
 
-            return new DriveService(new BaseClientService.Initializer
+            // 3. Pass it to the DriveService. It will now auto-refresh seamlessly!
+            return new DriveService(new BaseClientService.Initializer()
             {
                 HttpClientInitializer = credential,
-                ApplicationName = "StorageStandby"
+                ApplicationName = "StorageStandby",
             });
+
         }
 
         // TODO: fix accessToken expiration <-- double check
         // The items to be synced are passed into this function
         public async Task<SyncResult> ExecuteSyncQueueAsync(
             SyncEvent syncEvent, // pre-created and passed in
-            string currentAccessToken, // accessToken for API services
+            string accountId,
             IReadOnlyList<PendingSyncItem> queue, // queue to be persisted
             CancellationToken cancellationToken = default)
         {
+            string currentAccessToken = await _tokenManager.GetValidAccessTokenAsync(
+                Providers.Google,
+                accountId);
+            string refreshToken = _tokenManager.UnencryptRefreshToken(await _tokenManager.GetRefreshTokenAsync(
+                Providers.Google, 
+                accountId)
+            ?? throw new NullReferenceException("Attempted refresh token at: " + accountId + "is null"));
+
             ArgumentNullException.ThrowIfNull(syncEvent);
             ArgumentException.ThrowIfNullOrWhiteSpace(currentAccessToken);
             ArgumentNullException.ThrowIfNull(queue);
@@ -87,7 +133,10 @@ namespace StorageStandby.Backend.Services
             syncEvent.UnfinishedItems = string.Join(";", queue.Select(i => i.LocalPath));
 
             // building a Drive Client with currentAccessToken
-            using var driveService = BuildDriveClient(currentAccessToken);
+            using var driveService = BuildDriveClient(
+                currentAccessToken,
+                refreshToken,
+                accountId);
 
             var watchedFolder = await _db.WatchedFolders
                 .Include(folder => folder.AssignedClouds)
@@ -397,7 +446,14 @@ namespace StorageStandby.Backend.Services
             string accessToken = await _tokenManager.GetValidAccessTokenAsync(
                 Providers.Google,
                 accountId);
-            using var driveService = BuildDriveClient(accessToken);
+            string refreshToken = _tokenManager.UnencryptRefreshToken(await _tokenManager.GetRefreshTokenAsync(
+                Providers.Google, 
+                accountId)
+            ?? throw new NullReferenceException("Attempted refresh token at: " + accountId + "is null"));
+            using var driveService = BuildDriveClient(
+                accessToken,
+                refreshToken,
+                accountId);
             var metadata = new Google.Apis.Drive.v3.Data.File
             {
                 Name = folderName,
@@ -420,8 +476,15 @@ namespace StorageStandby.Backend.Services
             string accessToken = await _tokenManager.GetValidAccessTokenAsync(
                 Providers.Google,
                 accountId);
-            using var driveService = BuildDriveClient(accessToken);
-
+            string refreshToken = _tokenManager.UnencryptRefreshToken(await _tokenManager.GetRefreshTokenAsync(
+                Providers.Google, 
+                accountId)
+            ?? throw new NullReferenceException("Attempted refresh token at: " + accountId + "is null"));
+            using var driveService = BuildDriveClient(
+                accessToken,
+                refreshToken,
+                accountId);
+            
             try
             {
                 var request = driveService.Files.Get(remoteFolderId);
@@ -447,7 +510,14 @@ namespace StorageStandby.Backend.Services
             string accessToken = await _tokenManager.GetValidAccessTokenAsync(
                 Providers.Google,
                 accountId);
-            using var driveService = BuildDriveClient(accessToken);
+            string refreshToken = _tokenManager.UnencryptRefreshToken(await _tokenManager.GetRefreshTokenAsync(
+                Providers.Google, 
+                accountId)
+            ?? throw new NullReferenceException("Attempted refresh token at: " + accountId + "is null"));
+            using var driveService = BuildDriveClient(
+                accessToken,
+                refreshToken,
+                accountId);
 
             try
             {
@@ -494,37 +564,6 @@ namespace StorageStandby.Backend.Services
             return folder.Id;
         }
 
-        // Uploads one local file as a new Drive file using the supplied access token.
-        public async Task<string> UploadSingleFileAsync(string currentAccessToken, string localPath, string remoteName, string parentId = null)
-        {
-            using var driveService = BuildDriveClient(currentAccessToken);
-
-            var fileMetadata = new Google.Apis.Drive.v3.Data.File
-            {
-                Name = remoteName
-            };
-
-            if (!string.IsNullOrEmpty(parentId))
-            {
-                fileMetadata.Parents = new List<string> { parentId };
-            }
-
-            using (var stream = new FileStream(localPath, FileMode.Open, FileAccess.Read))
-            {
-                var request = driveService.Files.Create(fileMetadata, stream, "application/octet-stream");
-                request.Fields = "id";
-
-                var progress = await request.UploadAsync(CancellationToken.None);
-
-                if (progress.Status == UploadStatus.Failed)
-                {
-                    throw new Exception($"Upload failed for {remoteName}: {progress.Exception?.Message}");
-                }
-
-                return request.ResponseBody?.Id;
-            }
-        }
-
         // ----------------------------------------------------------
         // REST API
         // ----------------------------------------------------------
@@ -539,7 +578,14 @@ namespace StorageStandby.Backend.Services
             string accessToken = await _tokenManager.GetValidAccessTokenAsync(
                 Providers.Google,
                 accountId);
-            using var driveService = BuildDriveClient(accessToken);
+            string refreshToken = _tokenManager.UnencryptRefreshToken(await _tokenManager.GetRefreshTokenAsync(
+                Providers.Google, 
+                accountId)
+            ?? throw new NullReferenceException("Attempted refresh token at: " + accountId + "is null"));
+            using var driveService = BuildDriveClient(
+                accessToken,
+                refreshToken,
+                accountId);
             var about = await driveService.About.Get().ExecuteAsync(cancellationToken);
 
             long limit = about.StorageQuota?.Limit ?? 0;
@@ -874,7 +920,7 @@ namespace StorageStandby.Backend.Services
             string unencryptedToken = string.Empty;
             if (token is not null)
             {
-                unencryptedToken = _dataProtector.CreateProtector("GoogleTokenProtector").Unprotect(token.EncryptedRefreshToken);
+                unencryptedToken = _tokenManager.UnencryptRefreshToken(token);
             }
             else
             {

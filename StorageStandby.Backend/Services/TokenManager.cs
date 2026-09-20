@@ -122,6 +122,11 @@ public class TokenManager
         return token; // returns null if not found
     }
 
+    public string UnencryptRefreshToken(CloudToken token)
+    {
+        return _dataProtector.CreateProtector("GoogleTokenProtector").Unprotect(token.EncryptedRefreshToken);
+    }
+
     // DEV: SQL Update equivalent
     // DEV: EF Core tracks objects you read, and if you change a property and call SaveChangesAsync, EF Core will automatically generate an UPDATE SQL query for the fields you just updated
     public async Task FlagRefreshTokenAsExpiredAsync(Providers providerName, string accountId)
