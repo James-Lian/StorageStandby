@@ -35,17 +35,35 @@ namespace StorageStandby.Backend.Services
     public interface ICloudProvider
     {
         string ProviderName { get; }
-        Task<SyncResult> ExecuteSyncQueueAsync();
-        Task ExecuteItemAsync();
+        Task<SyncResult> ExecuteSyncQueueAsync(
+            SyncEvent syncEvent,
+            string accountId,
+            IReadOnlyList<PendingSyncItem> queue,
+            CancellationToken cancellationToken = default);
         Task<List<ConnectedAccountDto>> GetConnectedAccounts();
-        Task<long> GetRemainingStorageQuotaAsync();
-        Task UploadAsync(string localFilePath, string remoteFolderPath);
-        Task DeleteAsync(string remoteFileId);
-        Task MoveAsync();
-        Task StartOAuthAsync(
-            AppDbContext db,
-            IDataProtectionProvider dataProtector,
-            IConfiguration config,
-            HttpClient httpClient);
+        Task<StorageQuotaDto> GetRemainingStorageQuotaAsync(
+            string accountId, 
+            CancellationToken cancellationToken = default);
+        Task<AuthResult> StartOAuthAsync();
+    }
+    internal static class SyncEventPathHelper
+    {
+        // Adds a local path to a semicolon-delimited event path list.
+        public static string AppendPath(string current, string path)
+        {
+            return string.IsNullOrEmpty(current)
+                ? path
+                : $"{current};{path}";
+        }
+
+        // Removes a local path from a semicolon-delimited event path list.
+        public static string RemovePath(string current, string path)
+        {
+            if (string.IsNullOrEmpty(current)) return string.Empty;
+            
+            return string.Join(";", current
+                .Split(';', StringSplitOptions.RemoveEmptyEntries)
+                .Where(p => !p.Equals(path, StringComparison.OrdinalIgnoreCase)));
+        }
     }
 }

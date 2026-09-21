@@ -24,7 +24,7 @@ using GoogleApiException = Google.GoogleApiException;
 
 namespace StorageStandby.Backend.Services
 {
-    public class GoogleDriveProvider
+    public class GoogleDriveProvider : ICloudProvider
     {
         private readonly AppDbContext _db;
         private readonly BackupEngineState _state;
@@ -109,7 +109,6 @@ namespace StorageStandby.Backend.Services
 
         }
 
-        // TODO: fix accessToken expiration <-- double check
         // The items to be synced are passed into this function
         public async Task<SyncResult> ExecuteSyncQueueAsync(
             SyncEvent syncEvent, // pre-created and passed in
@@ -123,7 +122,7 @@ namespace StorageStandby.Backend.Services
             string refreshToken = _tokenManager.UnencryptRefreshToken(await _tokenManager.GetRefreshTokenAsync(
                 Providers.Google, 
                 accountId)
-            ?? throw new NullReferenceException("Attempted refresh token at: " + accountId + "is null"));
+            ?? throw new NullReferenceException(_tokenManager.NullReferenceExceptionMsg(Providers.Google, accountId)));
 
             ArgumentNullException.ThrowIfNull(syncEvent);
             ArgumentException.ThrowIfNullOrWhiteSpace(currentAccessToken);
@@ -165,8 +164,8 @@ namespace StorageStandby.Backend.Services
                 {
                     await ExecuteItemAsync(driveService, watchedFolder.LocalPath!, cloud.RemoteFolderId, item, cancellationToken);
                     succeeded++;
-                    syncEvent.SyncedItems = AppendPath(syncEvent.SyncedItems, item.LocalPath);
-                    syncEvent.UnfinishedItems = RemovePath(syncEvent.UnfinishedItems, item.LocalPath);
+                    syncEvent.SyncedItems = SyncEventPathHelper.AppendPath(syncEvent.SyncedItems, item.LocalPath);
+                    syncEvent.UnfinishedItems = SyncEventPathHelper.RemovePath(syncEvent.UnfinishedItems, item.LocalPath);
                 }
                 catch (OperationCanceledException)
                 {
@@ -244,24 +243,6 @@ namespace StorageStandby.Backend.Services
                 var existing = await FindByLocalPathAsync(driveService, remoteRootId, localRootPath, item.LocalPath, cancellationToken);
                 await UploadAsync(driveService, localRootPath, remoteRootId, item.LocalPath, existing?.Id, cancellationToken);
             }
-        }
-
-        // Adds a local path to a semicolon-delimited event path list.
-        private static string AppendPath(string current, string path)
-        {
-            if (string.IsNullOrEmpty(current)) return string.Empty;
-
-            return string.IsNullOrEmpty(current) ? path : $"{current};{path}";
-        }
-
-        // Removes a local path from a semicolon-delimited event path list.
-        private static string RemovePath(string current, string path)
-        {
-            if (string.IsNullOrEmpty(current)) return string.Empty;
-            
-            return string.Join(";", current
-                .Split(';', StringSplitOptions.RemoveEmptyEntries)
-                .Where(p => !p.Equals(path, StringComparison.OrdinalIgnoreCase)));
         }
 
         // Resolves a local path beneath the watched folder to its current Drive item.
@@ -449,7 +430,7 @@ namespace StorageStandby.Backend.Services
             string refreshToken = _tokenManager.UnencryptRefreshToken(await _tokenManager.GetRefreshTokenAsync(
                 Providers.Google, 
                 accountId)
-            ?? throw new NullReferenceException("Attempted refresh token at: " + accountId + "is null"));
+            ?? throw new NullReferenceException(_tokenManager.NullReferenceExceptionMsg(Providers.Google, accountId)));
             using var driveService = BuildDriveClient(
                 accessToken,
                 refreshToken,
@@ -479,7 +460,7 @@ namespace StorageStandby.Backend.Services
             string refreshToken = _tokenManager.UnencryptRefreshToken(await _tokenManager.GetRefreshTokenAsync(
                 Providers.Google, 
                 accountId)
-            ?? throw new NullReferenceException("Attempted refresh token at: " + accountId + "is null"));
+            ?? throw new NullReferenceException(_tokenManager.NullReferenceExceptionMsg(Providers.Google, accountId)));
             using var driveService = BuildDriveClient(
                 accessToken,
                 refreshToken,
@@ -513,7 +494,7 @@ namespace StorageStandby.Backend.Services
             string refreshToken = _tokenManager.UnencryptRefreshToken(await _tokenManager.GetRefreshTokenAsync(
                 Providers.Google, 
                 accountId)
-            ?? throw new NullReferenceException("Attempted refresh token at: " + accountId + "is null"));
+            ?? throw new NullReferenceException(_tokenManager.NullReferenceExceptionMsg(Providers.Google, accountId)));
             using var driveService = BuildDriveClient(
                 accessToken,
                 refreshToken,
@@ -581,7 +562,7 @@ namespace StorageStandby.Backend.Services
             string refreshToken = _tokenManager.UnencryptRefreshToken(await _tokenManager.GetRefreshTokenAsync(
                 Providers.Google, 
                 accountId)
-            ?? throw new NullReferenceException("Attempted refresh token at: " + accountId + "is null"));
+            ?? throw new NullReferenceException(_tokenManager.NullReferenceExceptionMsg(Providers.Google, accountId)));
             using var driveService = BuildDriveClient(
                 accessToken,
                 refreshToken,
@@ -680,9 +661,6 @@ namespace StorageStandby.Backend.Services
 
             try
             {
-
-                // DEV;TODO: refresh token already exists
-                // --> DEV;TODO: is it valid? (expiration)
 
                 // Wait for Google to redirect back to us - code pauses here until user logs in
                 // times out after 120s if user cancels
