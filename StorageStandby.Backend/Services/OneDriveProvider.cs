@@ -11,6 +11,8 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Graph;
+using Microsoft.Graph.Models;
+using Microsoft.Kiota.Abstractions;
 using Microsoft.Kiota.Abstractions.Authentication;
 
 namespace StorageStandby.Backend.Services
@@ -44,7 +46,7 @@ namespace StorageStandby.Backend.Services
             _tokenManager = tokenManager;
         }
 
-        private GraphServiceClient BuildDriveClient(string accountId)
+        private GraphServiceClient BuildGraphClient(string accountId)
         {
             var tokenProvider = new TokenManagerAccessTokenProvider(
                 _tokenManager, 
@@ -91,26 +93,18 @@ namespace StorageStandby.Backend.Services
             IReadOnlyList<PendingSyncItem> queue, // queue to be persisted
             CancellationToken cancellationToken = default)
         {
-            string refreshToken = _tokenManager.UnencryptRefreshToken(await _tokenManager.GetRefreshTokenAsync(
-                Providers.Microsoft, 
-                accountId) 
-            ?? throw new NullReferenceException(_tokenManager.NullReferenceExceptionMsg(Providers.Microsoft, accountId)));
-
             ArgumentNullException.ThrowIfNull(syncEvent);
             ArgumentException.ThrowIfNullOrEmpty(accountId);
             ArgumentNullException.ThrowIfNull(queue);
             
             syncEvent.UnfinishedItems = string.Join(";", queue.Select(i => i.LocalPath));
 
-            // automatic garbage cleanup at the end of scope
-            using var graphService = BuildDriveClient(accountId);
-
             // retrieving matching watchedfolder using id and also load its associated cloud information
             var watchedFolder = await _db.WatchedFolders
                 .Include(folder => folder.AssignedClouds)
                 .SingleAsync(folder => folder.Id == syncEvent.WatchedFolderId, cancellationToken);
             var cloud = watchedFolder.AssignedClouds.Single(metadata =>
-                metadata.Provider == Providers.Google && metadata.AccountId == syncEvent.AccountId);
+                metadata.Provider == Providers.Microsoft && metadata.AccountId == syncEvent.AccountId);
 
             // sync event metadata
             syncEvent.CompletionType = SyncEventType.InProgress;
@@ -129,7 +123,15 @@ namespace StorageStandby.Backend.Services
                 cancellationToken.ThrowIfCancellationRequested();
                 try
                 {
-                    await ExecuteItemAsync(graphService, watchedFolder.LocalPath!, cloud.RemoteFolderId, item, cancellationToken);
+                    await ExecuteWithTokenRetryAsync(
+                        accountId,
+                        graphService => ExecuteItemAsync(
+                            graphService,
+                            watchedFolder.LocalPath!,
+                            cloud.RemoteFolderId,
+                            item,
+                            cancellationToken),
+                        cancellationToken);
                     succeeded++;
                     syncEvent.SyncedItems = SyncEventPathHelper.AppendPath(syncEvent.SyncedItems, item.LocalPath);
                     syncEvent.UnfinishedItems = SyncEventPathHelper.RemovePath(syncEvent.UnfinishedItems, item.LocalPath);
@@ -167,24 +169,6 @@ namespace StorageStandby.Backend.Services
             };
         }
 
-        // // Adds a local path to a semicolon-delimited event path list.
-        // private static string AppendPath(string current, string path)
-        // {
-        //     if (string.IsNullOrEmpty(current)) return string.Empty;
-
-        //     return string.IsNullOrEmpty(current) ? path : $"{current};{path}";
-        // }
-
-        // // Removes a local path from a semicolon-delimited event path list.
-        // private static string RemovePath(string current, string path)
-        // {
-        //     if (string.IsNullOrEmpty(current)) return string.Empty;
-            
-        //     return string.Join(";", current
-        //         .Split(';', StringSplitOptions.RemoveEmptyEntries)
-        //         .Where(p => !p.Equals(path, StringComparison.OrdinalIgnoreCase)));
-        // }
-
         private async Task ExecuteItemAsync(
             GraphServiceClient graphService,
             string localRootPath,
@@ -193,45 +177,224 @@ namespace StorageStandby.Backend.Services
             CancellationToken cancellationToken
         )
         {
-            
+            string driveId = (await graphService.Me.Drive.GetAsync(cancellationToken: cancellationToken))?.Id
+                ?? throw new InvalidOperationException("Microsoft Graph did not return the OneDrive ID.");
+
+            if (item.Deleted)
+            {
+                var remoteItem = await FindByLocalPathAsync(
+                    graphService, driveId, remoteRootId, localRootPath,
+                    item.OriginalLocalPath ?? item.LocalPath, cancellationToken)
+                    ?? throw new FileNotFoundException("Remote item to delete was not found.", item.LocalPath);
+
+                await graphService.Drives[driveId].Items[remoteItem.Id!].DeleteAsync(cancellationToken: cancellationToken);
+                return;
+            }
+
+            DriveItem? existing = null;
+            if (item.Moved || item.Renamed)
+            {
+                existing = await FindByLocalPathAsync(
+                    graphService, driveId, remoteRootId, localRootPath,
+                    item.OriginalLocalPath ?? item.LocalPath, cancellationToken)
+                    ?? throw new FileNotFoundException("Remote item to update was not found.", item.LocalPath);
+            }
+
+            if (item.Moved)
+            {
+                string destinationParentPath = Path.GetDirectoryName(item.LocalPath) ?? localRootPath;
+                string destinationParentId = await EnsureFolderPathAsync(
+                    graphService, driveId, localRootPath, remoteRootId,
+                    destinationParentPath, cancellationToken);
+
+                await graphService.Drives[driveId].Items[existing!.Id!].PatchAsync(
+                    new DriveItem
+                    {
+                        ParentReference = new ItemReference { Id = destinationParentId }
+                    },
+                    cancellationToken: cancellationToken);
+            }
+
+            if (item.Renamed)
+            {
+                await graphService.Drives[driveId].Items[existing!.Id!].PatchAsync(
+                    new DriveItem { Name = Path.GetFileName(item.LocalPath) },
+                    cancellationToken: cancellationToken);
+            }
+
+            if (item.Changed || item.Created)
+            {
+                if (item.IsFolder)
+                {
+                    await EnsureFolderPathAsync(
+                        graphService, driveId, localRootPath, remoteRootId,
+                        item.LocalPath, cancellationToken);
+                    return;
+                }
+
+                var current = await FindByLocalPathAsync(
+                    graphService, driveId, remoteRootId, localRootPath,
+                    item.LocalPath, cancellationToken);
+                await UploadAsync(
+                    graphService, driveId, localRootPath, remoteRootId,
+                    item.LocalPath, current?.Id, cancellationToken);
+            }
+        }
+
+        private async Task<DriveItem?> FindByLocalPathAsync(
+            GraphServiceClient graphService,
+            string driveId,
+            string remoteRootId,
+            string localRootPath,
+            string localPath,
+            CancellationToken cancellationToken)
+        {
+            string relativePath = Path.GetRelativePath(localRootPath, localPath);
+            if (relativePath == ".") return null;
+
+            string parentId = remoteRootId;
+            DriveItem? current = null;
+            string[] segments = relativePath
+                .Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                .Where(segment => !string.IsNullOrWhiteSpace(segment) && segment != ".")
+                .ToArray();
+
+            for (int index = 0; index < segments.Length; index++)
+            {
+                bool isFinalSegment = index == segments.Length - 1;
+                var matches = await FindChildrenByNameAsync(
+                    graphService, driveId, parentId, segments[index], isFinalSegment, cancellationToken);
+                if (matches.Count == 0) return null;
+                if (matches.Count > 1)
+                {
+                    throw new InvalidOperationException(
+                        $"The remote path '{localPath}' is ambiguous: multiple items named '{segments[index]}' exist under the same folder.");
+                }
+
+                current = matches[0];
+                parentId = current.Id!;
+            }
+
+            return current;
+        }
+
+        private static async Task<IList<DriveItem>> FindChildrenByNameAsync(
+            GraphServiceClient graphService,
+            string driveId,
+            string parentId,
+            string name,
+            bool allowFiles,
+            CancellationToken cancellationToken)
+        {
+            string escapedName = name.Replace("'", "''");
+            var response = await graphService.Drives[driveId].Items[parentId].Children.GetAsync(
+                requestConfiguration =>
+                {
+                    requestConfiguration.QueryParameters.Filter = $"name eq '{escapedName}'";
+                    requestConfiguration.QueryParameters.Select = new[] { "id", "name", "file", "folder", "parentReference" };
+                },
+                cancellationToken);
+
+            return response?.Value?
+                .Where(item => allowFiles || item.Folder is not null)
+                .ToList() ?? new List<DriveItem>();
+        }
+
+        private async Task<string> EnsureFolderPathAsync(
+            GraphServiceClient graphService,
+            string driveId,
+            string localRootPath,
+            string remoteRootId,
+            string localPath,
+            CancellationToken cancellationToken)
+        {
+            string relativePath = Path.GetRelativePath(localRootPath, localPath);
+            string parentId = remoteRootId;
+            foreach (string segment in relativePath.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))
+            {
+                if (string.IsNullOrWhiteSpace(segment) || segment == ".") continue;
+                var matches = await FindChildrenByNameAsync(
+                    graphService, driveId, parentId, segment, allowFiles: false, cancellationToken);
+                if (matches.Count > 1)
+                {
+                    throw new InvalidOperationException($"Multiple remote folders match '{localPath}'.");
+                }
+
+                if (matches.Count == 1)
+                {
+                    parentId = matches[0].Id!;
+                    continue;
+                }
+
+                var created = await graphService.Drives[driveId].Items[parentId].Children.PostAsync(
+                    new DriveItem
+                    {
+                        Name = segment,
+                        Folder = new Folder(),
+                        AdditionalData = new Dictionary<string, object>
+                        {
+                            ["@microsoft.graph.conflictBehavior"] = "fail"
+                        }
+                    },
+                    cancellationToken: cancellationToken);
+                parentId = created?.Id
+                    ?? throw new InvalidOperationException($"Microsoft Graph did not return an ID for folder '{segment}'.");
+            }
+
+            return parentId;
         }
 
         private async Task UploadAsync(
             GraphServiceClient graphService,
-            CancellationToken cancellationToken
-        )
+            string driveId,
+            string localRootPath,
+            string remoteRootId,
+            string localPath,
+            string? existingId,
+            CancellationToken cancellationToken)
         {
-            
+            string parentPath = Path.GetDirectoryName(localPath) ?? localRootPath;
+            string parentId = await EnsureFolderPathAsync(
+                graphService, driveId, localRootPath, remoteRootId,
+                parentPath, cancellationToken);
+
+            await using var stream = File.OpenRead(localPath);
+            if (existingId is not null)
+            {
+                await graphService.Drives[driveId].Items[existingId].Content.PutAsync(
+                    stream, cancellationToken: cancellationToken);
+                return;
+            }
+
+            string remotePath = Uri.EscapeDataString(Path.GetFileName(localPath));
+            await graphService.Drives[driveId].Items[parentId].ItemWithPath(remotePath).Content.PutAsync(
+                stream, cancellationToken: cancellationToken);
         }
 
-        public async Task UploadFileAsync(
+        private async Task ExecuteWithTokenRetryAsync(
             string accountId,
-            string localFilePath,
-            string remoteFolderPath)
+            Func<GraphServiceClient, Task> operation,
+            CancellationToken cancellationToken)
         {
-            ArgumentException.ThrowIfNullOrWhiteSpace(accountId);
-            ArgumentException.ThrowIfNullOrWhiteSpace(localFilePath);
-            ArgumentException.ThrowIfNullOrWhiteSpace(remoteFolderPath);
+            for (int attempt = 0; attempt < 2; attempt++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                using var graphClient = BuildGraphClient(accountId);
 
-            string accessToken = await _tokenManager.GetValidAccessTokenAsync(Providers.Microsoft, accountId);
-            string remotePath = string.IsNullOrWhiteSpace(remoteFolderPath)
-                ? Path.GetFileName(localFilePath)
-                : $"{remoteFolderPath.TrimEnd('/')}/{Path.GetFileName(localFilePath)}";
-            string encodedPath = string.Join(
-                "/",
-                remotePath.Split('/', StringSplitOptions.RemoveEmptyEntries)
-                    .Select(Uri.EscapeDataString));
+                try
+                {
+                    await operation(graphClient);
+                    return;
+                }
+                catch (ApiException ex) when (ex.ResponseStatusCode == 401 && attempt == 0)
+                {
+                    _tokenManager.ClearCachedAccessToken(
+                        Providers.Microsoft,
+                        accountId);
+                }
+            }
 
-            using var request = CreateGraphRequest(
-                HttpMethod.Put,
-                $"/me/drive/root:/{encodedPath}:/content",
-                accessToken);
-            await using FileStream fileStream = File.OpenRead(localFilePath);
-            request.Content = new StreamContent(fileStream);
-            request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
-
-            using var response = await _httpClient.SendAsync(request);
-            await EnsureSuccessAsync(response);
+            throw new InvalidOperationException("The OneDrive operation did not complete.");
         }
 
         // ----------------------------------------------------------
@@ -239,9 +402,10 @@ namespace StorageStandby.Backend.Services
         // ----------------------------------------------------------
         public async Task<StorageQuotaDto> GetRemainingStorageQuotaAsync(string accountId, CancellationToken cancellationToken=default)
         {
-            string accessToken = await _tokenManager.GetValidAccessTokenAsync(Providers.Microsoft, accountId);
-            using var request = CreateGraphRequest(HttpMethod.Get, "/me/drive?$select=quota", accessToken);
-            using var response = await _httpClient.SendAsync(request);
+            using var response = await SendGraphRequestWithTokenRetryAsync(
+                accountId,
+                accessToken => CreateGraphRequest(HttpMethod.Get, "/me/drive?$select=quota", accessToken),
+                cancellationToken);
             await EnsureSuccessAsync(response);
 
             using var document = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync());
@@ -252,6 +416,32 @@ namespace StorageStandby.Backend.Services
                 TotalBytes = quota.GetProperty("total").GetInt64(),
                 UsedBytes = quota.GetProperty("used").GetInt64()
             };
+        }
+
+        private async Task<HttpResponseMessage> SendGraphRequestWithTokenRetryAsync(
+            string accountId,
+            Func<string, HttpRequestMessage> requestFactory,
+            CancellationToken cancellationToken)
+        {
+            for (int attempt = 0; attempt < 2; attempt++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                string accessToken = await _tokenManager.GetValidAccessTokenAsync(
+                    Providers.Microsoft,
+                    accountId);
+                using var request = requestFactory(accessToken);
+                HttpResponseMessage response = await _httpClient.SendAsync(request, cancellationToken);
+
+                if (response.StatusCode != HttpStatusCode.Unauthorized || attempt == 1)
+                {
+                    return response;
+                }
+
+                response.Dispose();
+                _tokenManager.ClearCachedAccessToken(Providers.Microsoft, accountId);
+            }
+
+            throw new InvalidOperationException("The Microsoft Graph request did not complete.");
         }
 
         // ----------------------------------------------------------
@@ -273,8 +463,9 @@ namespace StorageStandby.Backend.Services
 
         public async Task<AuthResult> StartOAuthAsync()
         {
-            string clientId = Uri.EscapeDataString(_configuration["MicrosoftOAuth:ClientID"])
-                ?? throw new InvalidOperationException("Microsoft client ID not configured.");
+            string clientId = Uri.EscapeDataString(
+                _configuration["MicrosoftOAuth:ClientID"]
+                ?? throw new InvalidOperationException("Microsoft client ID not configured."));
             string tenant = _configuration["MicrosoftOAuth:TenantID"] ?? "common";
             int port = GetAvailablePort(5432);
             string redirectUri = Uri.EscapeDataString($"http://localhost:{port}/callback/");
@@ -312,7 +503,7 @@ namespace StorageStandby.Backend.Services
 
             try
             {
-                Process.Start(new ProcessStartInfo
+                System.Diagnostics.Process.Start(new ProcessStartInfo
                 {
                     FileName = authorizationUrl,
                     UseShellExecute = true
