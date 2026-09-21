@@ -250,6 +250,11 @@ public class TokenManager
         }
     }
 
+    public string NullReferenceExceptionMsg(Providers provider, string accountId)
+    {
+        return $"[{ProviderMetadata.ProviderNames[provider]}] Attempted refresh token at: {accountId} is null";
+    }
+
     // Helper class to parse Google's JSON response
     public class TokenResponse
     {

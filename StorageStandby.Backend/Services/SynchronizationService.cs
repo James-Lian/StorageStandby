@@ -197,15 +197,11 @@ namespace StorageStandby.Backend.Core
             string accountId,
             CancellationToken cancellationToken)
         {
-            string accessToken = await _tokenManager.GetValidAccessTokenAsync(
-                Providers.Microsoft,
-                accountId);
-
             await using var scope = _scopeFactory.CreateAsyncScope();
             var provider = scope.ServiceProvider.GetRequiredService<OneDriveProvider>();
             return await provider.ExecuteSyncQueueAsync(
                 syncEvent,
-                accessToken,
+                accountId,
                 queue,
                 cancellationToken);
         }

@@ -15,7 +15,7 @@ using Microsoft.Kiota.Abstractions.Authentication;
 
 namespace StorageStandby.Backend.Services
 {
-    public class OneDriveProvider
+    public class OneDriveProvider : ICloudProvider
     {
         private const string GraphBaseUrl = "https://graph.microsoft.com/v1.0";
         private readonly AppDbContext _db;
@@ -44,20 +44,28 @@ namespace StorageStandby.Backend.Services
             _tokenManager = tokenManager;
         }
 
-        private GraphServiceClient BuildDriveClient(string accessToken)
+        private GraphServiceClient BuildDriveClient(string accountId)
         {
-            var tokenProvider = new StaticAccessTokenProvider(accessToken);
+            var tokenProvider = new TokenManagerAccessTokenProvider(
+                _tokenManager, 
+                accountId);
+            
             var authProvider = new BaseBearerTokenAuthenticationProvider(tokenProvider);
             return new GraphServiceClient(authProvider);
         }
 
-        private sealed class StaticAccessTokenProvider : IAccessTokenProvider
+        // custom access token expiration management 
+        private sealed class TokenManagerAccessTokenProvider : IAccessTokenProvider
         {
-            private readonly string _accessToken;
+            private readonly TokenManager _tokenManager;
+            private readonly string _accountId;
 
-            public StaticAccessTokenProvider(string accessToken)
+            public TokenManagerAccessTokenProvider(
+                TokenManager tokenManager,
+                string accountId)
             {
-                _accessToken = accessToken;
+                _tokenManager = tokenManager;
+                _accountId = accountId;
                 AllowedHostsValidator = new AllowedHostsValidator(
                     new[] { "graph.microsoft.com" });
             }
@@ -69,7 +77,9 @@ namespace StorageStandby.Backend.Services
                 Dictionary<string, object>? additionalAuthenticationContext = null,
                 CancellationToken cancellationToken = default)
             {
-                return Task.FromResult(_accessToken);
+                return _tokenManager.GetValidAccessTokenAsync(
+                    Providers.Microsoft,
+                    _accountId);
             }
         }
 
@@ -77,37 +87,119 @@ namespace StorageStandby.Backend.Services
         // TODO: fix accessToken expiration <-- double check
         public async Task<SyncResult> ExecuteSyncQueueAsync(
             SyncEvent syncEvent, // pre-created and passed in
-            string currentAccessToken, // accessToken for API services
+            string accountId,
             IReadOnlyList<PendingSyncItem> queue, // queue to be persisted
             CancellationToken cancellationToken = default)
         {
+            string refreshToken = _tokenManager.UnencryptRefreshToken(await _tokenManager.GetRefreshTokenAsync(
+                Providers.Microsoft, 
+                accountId) 
+            ?? throw new NullReferenceException(_tokenManager.NullReferenceExceptionMsg(Providers.Microsoft, accountId)));
+
             ArgumentNullException.ThrowIfNull(syncEvent);
-            ArgumentException.ThrowIfNullOrEmpty(currentAccessToken);
+            ArgumentException.ThrowIfNullOrEmpty(accountId);
             ArgumentNullException.ThrowIfNull(queue);
             
             syncEvent.UnfinishedItems = string.Join(";", queue.Select(i => i.LocalPath));
 
             // automatic garbage cleanup at the end of scope
-            using var driveService = BuildDriveClient(currentAccessToken);
+            using var graphService = BuildDriveClient(accountId);
 
+            // retrieving matching watchedfolder using id and also load its associated cloud information
             var watchedFolder = await _db.WatchedFolders
                 .Include(folder => folder.AssignedClouds)
                 .SingleAsync(folder => folder.Id == syncEvent.WatchedFolderId, cancellationToken);
+            var cloud = watchedFolder.AssignedClouds.Single(metadata =>
+                metadata.Provider == Providers.Google && metadata.AccountId == syncEvent.AccountId);
 
+            // sync event metadata
             syncEvent.CompletionType = SyncEventType.InProgress;
             syncEvent.CompletedTimestamp = null;
             await _db.SaveChangesAsync(cancellationToken);
 
-            int initialCount = syncEvent
-            return new SyncResult{};
+            // success counters
+            int initialCount = syncEvent.UnfinishedItems
+                .Split(';', StringSplitOptions.RemoveEmptyEntries)
+                .Length;
+            int succeeded = 0;
+            int failed = 0;
+
+            foreach (var item in queue)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                try
+                {
+                    await ExecuteItemAsync(graphService, watchedFolder.LocalPath!, cloud.RemoteFolderId, item, cancellationToken);
+                    succeeded++;
+                    syncEvent.SyncedItems = SyncEventPathHelper.AppendPath(syncEvent.SyncedItems, item.LocalPath);
+                    syncEvent.UnfinishedItems = SyncEventPathHelper.RemovePath(syncEvent.UnfinishedItems, item.LocalPath);
+                }
+                catch (OperationCanceledException)
+                {
+                    syncEvent.CompletionType = SyncEventType.Interrupted;
+                    syncEvent.CompletedTimestamp = DateTime.UtcNow;
+                    _db.SaveChanges();
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    failed++;
+                    syncEvent.FailedItems.Add(new FailedItemsDetails
+                    {
+                        FailedItem = item.LocalPath,
+                        Details = ex.Message
+                    });
+                }
+
+                await _db.SaveChangesAsync(cancellationToken);
+            }
+
+                        syncEvent.CompletionType = failed == 0 ? SyncEventType.Succeeded : SyncEventType.Unfinished;
+            syncEvent.CompletedTimestamp = DateTime.UtcNow;
+            await _db.SaveChangesAsync(cancellationToken);
+
+            return new SyncResult
+            {
+                Status = syncEvent.CompletionType,
+                Succeeded = succeeded,
+                Failed = failed,
+                Unfinished = initialCount - succeeded - failed
+            };
         }
 
-        public async Task ExecuteItemAsync()
+        // // Adds a local path to a semicolon-delimited event path list.
+        // private static string AppendPath(string current, string path)
+        // {
+        //     if (string.IsNullOrEmpty(current)) return string.Empty;
+
+        //     return string.IsNullOrEmpty(current) ? path : $"{current};{path}";
+        // }
+
+        // // Removes a local path from a semicolon-delimited event path list.
+        // private static string RemovePath(string current, string path)
+        // {
+        //     if (string.IsNullOrEmpty(current)) return string.Empty;
+            
+        //     return string.Join(";", current
+        //         .Split(';', StringSplitOptions.RemoveEmptyEntries)
+        //         .Where(p => !p.Equals(path, StringComparison.OrdinalIgnoreCase)));
+        // }
+
+        private async Task ExecuteItemAsync(
+            GraphServiceClient graphService,
+            string localRootPath,
+            string remoteRootId,
+            PendingSyncItem item,
+            CancellationToken cancellationToken
+        )
         {
             
         }
 
-        public async Task UploadAsync()
+        private async Task UploadAsync(
+            GraphServiceClient graphService,
+            CancellationToken cancellationToken
+        )
         {
             
         }
@@ -145,7 +237,7 @@ namespace StorageStandby.Backend.Services
         // ----------------------------------------------------------
         // REST API
         // ----------------------------------------------------------
-        public async Task<StorageQuotaDto> GetRemainingStorageQuotaAsync(string accountId)
+        public async Task<StorageQuotaDto> GetRemainingStorageQuotaAsync(string accountId, CancellationToken cancellationToken=default)
         {
             string accessToken = await _tokenManager.GetValidAccessTokenAsync(Providers.Microsoft, accountId);
             using var request = CreateGraphRequest(HttpMethod.Get, "/me/drive?$select=quota", accessToken);
