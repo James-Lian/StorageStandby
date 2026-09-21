@@ -346,7 +346,7 @@ namespace StorageStandby.Backend.Core
                 .ToListAsync(cancellationToken);
         }
 
-        private Task<long> GetRemainingStorageQuotaAsync(
+        private Task<StorageQuotaDto> GetRemainingStorageQuotaAsync(
             ProviderAccountCloud cloud,
             CancellationToken cancellationToken)
         {
@@ -358,7 +358,7 @@ namespace StorageStandby.Backend.Core
             };
         }
 
-        private async Task<long> GetGoogleRemainingStorageAsync(
+        private async Task<StorageQuotaDto> GetGoogleRemainingStorageAsync(
             string accountId,
             CancellationToken cancellationToken)
         {
