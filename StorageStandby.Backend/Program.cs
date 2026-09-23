@@ -371,7 +371,8 @@ app.MapPost("/api/auth/google/revoke", async (
 });
 
 app.MapGet("/api/auth/google/accounts", async (
-    GoogleDriveProvider googleDriveProvider) =>
+    GoogleDriveProvider googleDriveProvider
+) =>
 {
     Console.WriteLine("[API] /auth/google/accounts endpoint hit");
     try

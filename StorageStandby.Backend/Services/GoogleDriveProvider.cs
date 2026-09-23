@@ -51,26 +51,13 @@ namespace StorageStandby.Backend.Services
 
         private string AuthScope = "https://www.googleapis.com/auth/drive.file " +
                 "https://www.googleapis.com/auth/drive.activity " +
-                "https://www.googleapis.com/auth/userinfo.email " +
-                "https://www.googleapis.com/auth/userinfo.profile " +
-                "openid";
+                "openid " +
+                "email " +
+                "profile";
 
         // ----------------------------------------------------------
         // SYNC AND UPLOAD METHODS
         // ----------------------------------------------------------
-
-        // Builds a short-lived Drive client authenticated with the supplied access token.
-        // private DriveService BuildDriveClient(string currentAccessToken)
-        // {
-
-        //     var credential = GoogleCredential.FromAccessToken(currentAccessToken);
-
-        //     return new DriveService(new BaseClientService.Initializer
-        //     {
-        //         HttpClientInitializer = credential,
-        //         ApplicationName = "StorageStandby"
-        //     });
-        // }
 
         private DriveService BuildDriveClient(
             string currentAccessToken, 
@@ -283,7 +270,7 @@ namespace StorageStandby.Backend.Services
             return current;
         }
 
-        // Finds non-trashed Drive children with an exact name under a parent.
+        // Finds non-trashed Drive children with a name matching the local segment, ignoring case.
         private static async Task<IList<Google.Apis.Drive.v3.Data.File>> FindChildrenByNameAsync(
             DriveService driveService,
             string parentId,
@@ -291,17 +278,20 @@ namespace StorageStandby.Backend.Services
             bool allowFiles,
             CancellationToken cancellationToken)
         {
-            string escapedName = name.Replace("'", "\\'");
             var request = driveService.Files.List();
-            // uses Google Drive API queries to search for specific matching item
-            request.Q = $"'{parentId}' in parents and name = '{escapedName}' and trashed = false";
+            request.Q = $"'{parentId}' in parents and trashed = false";
             if (!allowFiles)
             {
                 request.Q += " and mimeType = 'application/vnd.google-apps.folder'";
             }
             request.Spaces = "drive";
             request.Fields = "files(id,name,mimeType,parents)";
-            return (await request.ExecuteAsync(cancellationToken)).Files;
+
+            var files = (await request.ExecuteAsync(cancellationToken)).Files ?? new List<Google.Apis.Drive.v3.Data.File>();
+            return files
+                .Where(file => !string.IsNullOrWhiteSpace(file.Name)
+                    && string.Equals(file.Name, name, StringComparison.OrdinalIgnoreCase))
+                .ToList();
         }
 
         // Deletes a Drive item 
@@ -525,7 +515,7 @@ namespace StorageStandby.Backend.Services
         }
 
         // Creates one folder in Drive, optionally beneath the supplied parent.
-        public async Task<string> CreateFolderAsync(DriveService driveService, string currentAccessToken, string folderName, string parentId = null)
+        public async Task<string> CreateFolderAsync(DriveService driveService, string currentAccessToken, string folderName, string? parentId = null)
         {
             var folderMetadata = new Google.Apis.Drive.v3.Data.File
             {
@@ -569,9 +559,10 @@ namespace StorageStandby.Backend.Services
                 accountId);
             var about = await driveService.About.Get().ExecuteAsync(cancellationToken);
 
-            long limit = about.StorageQuota?.Limit ?? 0;
-            long usage = about.StorageQuota?.Usage ?? 0;
-            return new StorageQuotaDto{
+            ulong limit = (ulong)(about.StorageQuota?.Limit ?? 0L);
+            ulong usage = (ulong)(about.StorageQuota?.Usage ?? 0L);
+            return new StorageQuotaDto
+            {
                 TotalBytes = limit,
                 UsedBytes = usage,
             };
@@ -847,7 +838,13 @@ namespace StorageStandby.Backend.Services
                 System.Net.Sockets.ProtocolType.Tcp))
             {
                 socket.Bind(new System.Net.IPEndPoint(System.Net.IPAddress.Loopback, 0)); // Bind to any available port
-                return ((System.Net.IPEndPoint)socket.LocalEndPoint).Port;
+                var localEndPoint = socket.LocalEndPoint as System.Net.IPEndPoint;
+                if (localEndPoint is null)
+                {
+                    throw new InvalidOperationException("Failed to determine an available local port.");
+                }
+
+                return localEndPoint.Port;
             }
         }
 
@@ -894,7 +891,7 @@ namespace StorageStandby.Backend.Services
         {
 
             // 1. Get refresh token from SQLite + decrypt it using Windows DPAPI
-            CloudToken token = await _tokenManager.GetRefreshTokenAsync(Providers.Google, accountId);
+            CloudToken? token = await _tokenManager.GetRefreshTokenAsync(Providers.Google, accountId);
             string unencryptedToken = string.Empty;
             if (token is not null)
             {
@@ -940,9 +937,9 @@ namespace StorageStandby.Backend.Services
 
                     if (root.TryGetProperty("error", out var errorElement))
                     {
-                        string error = errorElement.GetString();
+                        string error = errorElement.GetString() ?? "Unknown error";
                         string description = root.TryGetProperty("error_description", out var descElement)
-                            ? descElement.GetString()
+                            ? descElement.GetString() ?? "No description provided."
                             : "No description provided.";
 
                         return new AuthResult
