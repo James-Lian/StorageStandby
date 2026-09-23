@@ -97,6 +97,7 @@ namespace StorageStandby.Backend.Workers
             await using var scope = _scopeFactory.CreateAsyncScope();
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
+            // reconcile any interrupted syncevents
             var lastEvent = await db.SyncEvents.LastOrDefaultAsync(stoppingToken);
             if (lastEvent?.CompletionType == SyncEventType.InProgress)
             {

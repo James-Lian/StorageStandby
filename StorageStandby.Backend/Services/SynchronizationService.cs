@@ -28,13 +28,6 @@ namespace StorageStandby.Backend.Core
         // ----------------------------------------------------------------------------------------------------
         // Sync & Queue Methods
 
-        // TODO:
-        // run on App startup, e.g. on frontend load? Setup function in API?
-        public async Task ReconcileSyncQueueAsync()
-        {
-            
-        }
-
         public async Task ExecuteSyncQueue(CancellationToken cancellationToken = default)
         {
             // 1. Build list of altered WatchedFolders

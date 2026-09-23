@@ -28,9 +28,9 @@ namespace StorageStandby.Backend.Services
     }
     public sealed class StorageQuotaDto
     {
-        public long TotalBytes { get; init; }
-        public long UsedBytes { get; init; }
-        public long RemainingBytes => TotalBytes - UsedBytes;
+        public ulong TotalBytes { get; init; }
+        public ulong UsedBytes { get; init; }
+        public ulong RemainingBytes => TotalBytes - UsedBytes;
     }
     public interface ICloudProvider
     {
@@ -64,6 +64,46 @@ namespace StorageStandby.Backend.Services
             return string.Join(";", current
                 .Split(';', StringSplitOptions.RemoveEmptyEntries)
                 .Where(p => !p.Equals(path, StringComparison.OrdinalIgnoreCase)));
+        }
+    }
+
+    internal static class ListenerPortHelper
+    {
+        public static int GetAvailablePort(int preferredPort)
+        {
+            // try preferred port first
+            if (IsPortAvailable(preferredPort))
+            {
+                return preferredPort;
+            }
+            // find any available port
+            using (var socket = new System.Net.Sockets.Socket(
+                System.Net.Sockets.AddressFamily.InterNetwork,
+                System.Net.Sockets.SocketType.Stream,
+                System.Net.Sockets.ProtocolType.Tcp))
+            {
+                socket.Bind(new System.Net.IPEndPoint(System.Net.IPAddress.Loopback, 0)); // Bind to any available port
+                return ((System.Net.IPEndPoint)socket.LocalEndPoint).Port;
+            }
+        }
+        // checks whether a specific TCP port is available for use on the local machine
+        public static bool IsPortAvailable(int port)
+        {
+            try
+            {
+                using (var socket = new System.Net.Sockets.Socket(
+                    System.Net.Sockets.AddressFamily.InterNetwork, // Specifies that the socket uses IPv4
+                    System.Net.Sockets.SocketType.Stream, // Specifies that the socket is a stream socket
+                    System.Net.Sockets.ProtocolType.Tcp)) // Explicitly sets the protocol to TCP
+                {
+                    socket.Bind(new System.Net.IPEndPoint(System.Net.IPAddress.Loopback, port));
+                    return true;
+                }
+            }
+            catch
+            {
+                return false;
+            }
         }
     }
 }

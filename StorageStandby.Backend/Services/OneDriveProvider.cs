@@ -413,8 +413,8 @@ namespace StorageStandby.Backend.Services
 
             return new StorageQuotaDto
             {
-                TotalBytes = quota.GetProperty("total").GetInt64(),
-                UsedBytes = quota.GetProperty("used").GetInt64()
+                TotalBytes = quota.GetProperty("total").GetUInt64(),
+                UsedBytes = quota.GetProperty("used").GetUInt64()
             };
         }
 
@@ -503,6 +503,7 @@ namespace StorageStandby.Backend.Services
 
             try
             {
+                // changed from Process.Start to prevent conflict with Graph.Models
                 System.Diagnostics.Process.Start(new ProcessStartInfo
                 {
                     FileName = authorizationUrl,
