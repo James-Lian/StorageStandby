@@ -35,6 +35,13 @@ namespace StorageStandby.Backend.Workers
         private CancellationToken _stoppingToken;
 
         private readonly ConcurrentDictionary<long, FileSystemWatcher> _activeWatchers = new(); // WatchedFolderId, FileSystemWatcher
+        private readonly ConcurrentDictionary<string, FileSystemWatcher> _activeWatchersParents = new(); // handles renames for WatchedFolders, but TODO: doesn't handle upper-stream naming changes (e.g. a folder rename in the grandfather's directory)
+        // -------------------------------------------------------------------
+            // Reconcile WatchedFolderActions (might not be in startup) 
+            // TODO:
+            // 1. Check if a WatchedFolder was moved inside another WatchedFolder (produce error)
+            // 2. Check if all the WatchedFolders still exist at their locations (prompt user to either delete the watchedfolder or )
+            // 3. If WatchedFolder renamed, rename all children (?)
         private readonly ConcurrentDictionary<string, bool> _trackedFolders = new(); // true is folder, false is file 
 
         // ASP.NET natively injects the state and a logger
@@ -390,7 +397,6 @@ namespace StorageStandby.Backend.Workers
             }
             else if (changeType == "Renamed" && oldFilePath != null) // renames or moves
             {
-                // TODO: handle MOVES which count as file renames
                 // differentiate between moves and renames
 
                 string oldDirectory = Path.GetDirectoryName(oldFilePath);

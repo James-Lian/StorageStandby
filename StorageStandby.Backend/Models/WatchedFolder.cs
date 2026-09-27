@@ -1,4 +1,6 @@
-﻿namespace StorageStandby.Backend.Models
+﻿using SQLitePCL;
+
+namespace StorageStandby.Backend.Models
 {
     /// A static class that holds reference values for watched folders.
     public static class WatchedFolderReference
@@ -45,6 +47,7 @@
         public bool KeepSnapshotsInSameAccount { get; set; } = true;
         public string SnapshotUrls { get; set; } = string.Empty; // semicolon delimited list of URLs to snapshot locations (if any)
 
+        public bool AutoAssignClouds = false;
         public Providers? PreferredProvider { get; set; } = null;
         public ProblematicFolderType Problem { get; set; } = ProblematicFolderType.None; // Configuration problem - NOT SYNC EVENT PROBLEM
 
@@ -53,15 +56,26 @@
         public DateTime? LastSync { get; set; }
         public DateTime DateAdded { get; set; }
         public SyncFrequency? CustomSyncFrequency { get; set; } = null;
+
+        // TODO:
+        async Task AddToAssignedCloud()
+        {
+            // creation events must be added to sync queue
+        }
+
+        async Task RemoveFromAssignedCloud()
+        {
+            // deletion events must be added to sync queue
+        }
     }
 
+    // Ties online clouds with local folders
     public class WatchedFolderCloudMetadata
     {
         public long Id { get; set; }
         public Providers Provider { get; set; }
         public string AccountId { get; set; }
 
-        // TODO: shit I gotta create a method to reconcile this
         public string RemoteFolderId { get; set; }
 
         // Foreign key to link back to the WatchedFolder in EF Core

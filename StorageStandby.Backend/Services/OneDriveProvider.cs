@@ -291,7 +291,7 @@ namespace StorageStandby.Backend.Services
                 requestConfiguration =>
                 {
                     requestConfiguration.QueryParameters.Filter = $"name eq '{escapedName}'";
-                    requestConfiguration.QueryParameters.Select = new[] { "id", "name", "file", "folder", "parentReference" };
+                    requestConfiguration.QueryParameters.Select = ["id", "name", "file", "folder", "parentReference"];
                 },
                 cancellationToken);
 

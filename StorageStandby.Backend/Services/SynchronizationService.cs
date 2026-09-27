@@ -214,22 +214,26 @@ namespace StorageStandby.Backend.Core
                 cancellationToken);
         }
 
+        // If manually managed:
         // 1. Check the AssignedClouds for previous syncs and add them to the list
+        
         // 2. Check the preferred provider (if applicable; if not added to assigned clouds, add)
         // 3. Check global preferred provider (if applicable)
-        // 4. Else (or if not enough space in any of the other clouds), find the cloud with the least amount of space
+        // 4. Else (or if not enough space in any of the other clouds), find the cloud with the most amount of space (only if new upload - otherwise, move it)
         public async Task<List<ProviderAccountCloud>> DetermineSyncDestinations(
             WatchedFolder folder,
             CancellationToken cancellationToken = default)
         {
             ArgumentNullException.ThrowIfNull(folder);
 
+            // retrieve destinations
             List<ProviderAccountCloud> destinations = [];
             if (folder.AssignedClouds.Count == 0)
             {
                 return destinations;
             }
 
+            // calculate necessary storage for full upload
             long requiredBytes = _fileSystem.GetWatchedFolderSize(folder, cancellationToken);
             var systemSettings = await ReadSystemSettingsAsync(cancellationToken);
 
@@ -269,7 +273,7 @@ namespace StorageStandby.Backend.Core
                     quotaByCloud[(cloud.Provider, cloud.AccountId)] =
                         await GetRemainingStorageQuotaAsync(cloud, cancellationToken);
                 }
-                catch (NotSupportedException)
+                catch (Exception ex) when (ex is NotSupportedException or NotImplementedException)
                 {
                     // Providers without a quota implementation are not eligible for automatic selection.
                 }
@@ -464,7 +468,7 @@ namespace StorageStandby.Backend.Core
                 Provider = provider,
                 AccountId = accountId,
                 WatchedFolderId = persistedFolder.Id,
-                RemoteFolderId = string.Empty,
+                RemoteFolderId = string.Empty, // TODO: <-- Wrong: RemoteFolderId should not be string.Empty
                 ConfigFileId = string.Empty
             };
 
@@ -481,11 +485,23 @@ namespace StorageStandby.Backend.Core
             });
         }
 
+        // Implement in the future: manual selection of files/directories to be re-synced
+
+        // Implement in the future: reconcile untracked changes (e.g. a renamed file that is not tracked, the old path no longer exists, while the new path seemingly was "uncreated")
+        // Note: MIGHT NOT consider untracked "changed files", just changes to the directory tree
+
+        // Implement in the future: for user-controlled staging/unstaging changes
         // 1. see which queue actions have previous dependencies - allow for user to stage certain changes
         // 2. remove useless dependencies that don't change anything
         public void QueueDependencyChecker()
         {
             throw new NotImplementedException();
+        }
+
+        // TODO:
+        public void DeleteWatchedFolder()
+        {
+            // both from storage and from cloud
         }
     }
 }
