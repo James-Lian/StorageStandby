@@ -77,12 +77,12 @@ public class TokenManager
         await using var scope = _scopeFactory.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
-        var existing = await db.CloudTokens.FirstOrDefaultAsync(t => t.ProviderName == provider && t.AccountId == accountId);
+        var existing = await db.CloudTokens.FirstOrDefaultAsync(t => t.Provider == provider && t.AccountId == accountId);
 
         if (existing == null) { 
             var newToken = new CloudToken
             {
-                ProviderName = provider,
+                Provider = provider,
                 EncryptedRefreshToken = encryptedToken,
                 Status = ConnectionStatus.Connected,
                 AccountId = accountId,
@@ -117,7 +117,7 @@ public class TokenManager
 
         // Generates a SQL query: SELECT * FROM CloudTokens WHERE ProviderName = 'Google' LIMIT 1
         CloudToken? token = await db.CloudTokens
-            .FirstOrDefaultAsync(token => token.ProviderName == provider && token.AccountId == accountId);
+            .FirstOrDefaultAsync(token => token.Provider == provider && token.AccountId == accountId);
 
         return token; // returns null if not found
     }
@@ -135,7 +135,7 @@ public class TokenManager
         await using var scope = _scopeFactory.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
-        var token = await db.CloudTokens.FirstOrDefaultAsync(t => t.ProviderName == providerName && t.AccountId == accountId);
+        var token = await db.CloudTokens.FirstOrDefaultAsync(t => t.Provider == providerName && t.AccountId == accountId);
 
         if (token != null)
         {
@@ -153,7 +153,7 @@ public class TokenManager
         await using var scope = _scopeFactory.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
-        var token = await db.CloudTokens.FirstOrDefaultAsync(t => t.ProviderName == provider && t.AccountId == accountId);
+        var token = await db.CloudTokens.FirstOrDefaultAsync(t => t.Provider == provider && t.AccountId == accountId);
         if (token != null)
         {
             db.CloudTokens.Remove(token);
@@ -183,7 +183,7 @@ public class TokenManager
         await using var scope = _scopeFactory.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
-        var tokenRecord = await db.CloudTokens.FirstOrDefaultAsync(t => t.ProviderName == provider && t.AccountId == accountId);
+        var tokenRecord = await db.CloudTokens.FirstOrDefaultAsync(t => t.Provider == provider && t.AccountId == accountId);
         // Refresh Token is null
         if (tokenRecord == null || string.IsNullOrEmpty(tokenRecord.EncryptedRefreshToken))
         {

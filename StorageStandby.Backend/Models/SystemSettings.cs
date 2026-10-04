@@ -1,4 +1,4 @@
-﻿using System.Text.Json;
+﻿using System.ComponentModel.DataAnnotations.Schema;
 
 namespace StorageStandby.Backend.Models
 {
@@ -25,11 +25,6 @@ namespace StorageStandby.Backend.Models
 
         // ----------------------------------------------------------
         // Cloud Settings
-        public Providers? GlobalPreferredProvider { get; set; } = null;
-
-        // ----------------------------------------------------------
-        // Local Settings
-        public string GlobalIgnoreRules { get; set; } = "*C:/"; // semicolon-delimited
 
         // ----------------------------------------------------------
         // Sync Settings
@@ -37,8 +32,10 @@ namespace StorageStandby.Backend.Models
         public DateTime? PauseSyncUntil { get; set; } = null; // null: indefinite pause; otherwise, resume after this time
         public List<SyncEvent> SyncEvents { get; set; } = new List<SyncEvent> { }; // might not be all... ?
 
+        [NotMapped]
         public SyncFrequency SyncFrequency { get; set; } = new SyncFrequency();
         public bool AutomaticSyncs { get; set; } = true;
+        public int AutomaticSyncIntervalMinutes { get; set; } = 60;
 
         // ----------------------------------------------------------
         // API Settings

@@ -13,29 +13,28 @@ namespace StorageStandby.Backend.Core
 {
     public class BackupEngineState
     {
-        private readonly WatchedFolderService _watchedFolderService;
-        private readonly AppDbContext _db;
+        private readonly IServiceScopeFactory _scopeFactory;
 
         public BackupEngineState(
-            WatchedFolderService watchedFolderService,
-            AppDbContext db
+            IServiceScopeFactory scopeFactory
         )
         {
-            _watchedFolderService = watchedFolderService;
-            _db = db;
+            _scopeFactory = scopeFactory;
         }
 
         // *** high level state ***
         public string Status { get; set; } = "Initializing";
-        private bool _isSyncPaused { get; set; } = false;
+        public bool IsSyncPaused { get; private set; } = false;
         private DateTime? _pauseSyncUntil { get; set; } = null;
         private readonly object _IsSyncPausedLock = new object();
         public void LoadSyncPauseFromDb()
         {
-            var settings = _db.SystemSettings.FirstOrDefault();
+            using var scope = _scopeFactory.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var settings = db.SystemSettings.FirstOrDefault();
             if (settings != null)
             {
-                _isSyncPaused = settings.IsSyncPaused;
+                IsSyncPaused = settings.IsSyncPaused;
                 _pauseSyncUntil = settings.PauseSyncUntil;
             }
         }
@@ -43,16 +42,18 @@ namespace StorageStandby.Backend.Core
         {
             lock (_IsSyncPausedLock)
             {
-                _isSyncPaused = isPaused;
+                IsSyncPaused = isPaused;
                 _pauseSyncUntil = pauseUntil;
                 
                 // Updates database too
-                var systemSettings = _db.SystemSettings.FirstOrDefault();
+                using var scope = _scopeFactory.CreateScope();
+                var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+                var systemSettings = db.SystemSettings.FirstOrDefault();
                 if (systemSettings != null)
                 {
                     systemSettings.IsSyncPaused = isPaused;
                     systemSettings.PauseSyncUntil = pauseUntil;
-                    _db.SaveChanges();
+                    db.SaveChanges();
                 }
             }
         }
@@ -63,7 +64,7 @@ namespace StorageStandby.Backend.Core
             {
                 return true;
             }
-            return _isSyncPaused;
+            return IsSyncPaused;
         }
 
         // *** transient UI state (dashboard instruments) ***
@@ -92,11 +93,19 @@ namespace StorageStandby.Backend.Core
 
         public bool IsSafeToSync()
         {
-            if (_isSyncPaused || IsOnMeteredConnection() || IsHeavyProcessRunning())
+            if (GetSyncPause() || IsOnMeteredConnection() || IsHeavyProcessRunning())
             {
                 return false;
             }
             return true;
+        }
+
+        public void NotifyNewFolderAdded(string? path)
+        {
+            if (!string.IsNullOrWhiteSpace(path) && !ActiveWatchedPaths.Contains(path))
+            {
+                ActiveWatchedPaths.Add(path);
+            }
         }
 
         private bool IsHeavyProcessRunning()

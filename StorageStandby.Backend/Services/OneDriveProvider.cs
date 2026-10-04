@@ -98,6 +98,7 @@ namespace StorageStandby.Backend.Services
             ArgumentNullException.ThrowIfNull(queue);
             
             syncEvent.UnfinishedItems = string.Join(";", queue.Select(i => i.LocalPath));
+            syncEvent.UnfinishedItemIds = string.Join(";", queue.Select(i => i.Id));
 
             // retrieving matching watchedfolder using id and also load its associated cloud information
             var watchedFolder = await _db.WatchedFolders
@@ -135,6 +136,8 @@ namespace StorageStandby.Backend.Services
                     succeeded++;
                     syncEvent.SyncedItems = SyncEventPathHelper.AppendPath(syncEvent.SyncedItems, item.LocalPath);
                     syncEvent.UnfinishedItems = SyncEventPathHelper.RemovePath(syncEvent.UnfinishedItems, item.LocalPath);
+                    syncEvent.SyncedItemIds = SyncEventPathHelper.AppendPath(syncEvent.SyncedItemIds, item.Id.ToString());
+                    syncEvent.UnfinishedItemIds = SyncEventPathHelper.RemovePath(syncEvent.UnfinishedItemIds, item.Id.ToString());
                 }
                 catch (OperationCanceledException)
                 {
@@ -177,6 +180,11 @@ namespace StorageStandby.Backend.Services
             CancellationToken cancellationToken
         )
         {
+            if (!item.Deleted && !item.IsFolder && !File.Exists(item.LocalPath))
+            {
+                item.Deleted = true;
+            }
+
             string driveId = (await graphService.Me.Drive.GetAsync(cancellationToken: cancellationToken))?.Id
                 ?? throw new InvalidOperationException("Microsoft Graph did not return the OneDrive ID.");
 
@@ -184,8 +192,11 @@ namespace StorageStandby.Backend.Services
             {
                 var remoteItem = await FindByLocalPathAsync(
                     graphService, driveId, remoteRootId, localRootPath,
-                    item.OriginalLocalPath ?? item.LocalPath, cancellationToken)
-                    ?? throw new FileNotFoundException("Remote item to delete was not found.", item.LocalPath);
+                    item.OriginalLocalPath ?? item.LocalPath, cancellationToken);
+                if (remoteItem is null)
+                {
+                    return;
+                }
 
                 await graphService.Drives[driveId].Items[remoteItem.Id!].DeleteAsync(cancellationToken: cancellationToken);
                 return;
@@ -400,6 +411,53 @@ namespace StorageStandby.Backend.Services
         // ----------------------------------------------------------
         // REST API
         // ----------------------------------------------------------
+        public async Task<string> CreateRemoteRootFolderAsync(
+            string accountId,
+            string folderName,
+            CancellationToken cancellationToken = default)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(accountId);
+            ArgumentException.ThrowIfNullOrWhiteSpace(folderName);
+
+            var graphService = BuildGraphClient(accountId);
+            string driveId = (await graphService.Me.Drive.GetAsync(cancellationToken: cancellationToken))?.Id
+                ?? throw new InvalidOperationException("Microsoft Graph did not return the OneDrive ID.");
+            var created = await graphService.Drives[driveId].Items["root"].Children.PostAsync(
+                new DriveItem
+                {
+                    Name = folderName,
+                    Folder = new Folder()
+                },
+                cancellationToken: cancellationToken);
+
+            return created?.Id
+                ?? throw new InvalidOperationException("OneDrive did not return a remote root ID.");
+        }
+
+        public async Task DeleteRemoteRootFolderAsync(
+            string accountId,
+            string remoteFolderId,
+            CancellationToken cancellationToken = default)
+        {
+            if (string.IsNullOrWhiteSpace(remoteFolderId))
+            {
+                return;
+            }
+
+            var graphService = BuildGraphClient(accountId);
+            string driveId = (await graphService.Me.Drive.GetAsync(cancellationToken: cancellationToken))?.Id
+                ?? throw new InvalidOperationException("Microsoft Graph did not return the OneDrive ID.");
+            try
+            {
+                await graphService.Drives[driveId].Items[remoteFolderId]
+                    .DeleteAsync(cancellationToken: cancellationToken);
+            }
+            catch (ApiException ex) when (ex.ResponseStatusCode == 404)
+            {
+                // Already absent, so removal is idempotent.
+            }
+        }
+
         public async Task<StorageQuotaDto> GetRemainingStorageQuotaAsync(string accountId, CancellationToken cancellationToken=default)
         {
             using var response = await SendGraphRequestWithTokenRetryAsync(
@@ -450,7 +508,7 @@ namespace StorageStandby.Backend.Services
         public Task<List<ConnectedAccountDto>> GetConnectedAccounts()
         {
             return _db.CloudTokens
-                .Where(account => account.ProviderName == Providers.Microsoft)
+                .Where(account => account.Provider == Providers.Microsoft)
                 .Select(account => new ConnectedAccountDto
                 {
                     Id = account.AccountId,

@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using StorageStandby.Backend.Data;
 
@@ -10,9 +11,11 @@ using StorageStandby.Backend.Data;
 namespace StorageStandby.Backend.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20261004042158_SyncArchitecture")]
+    partial class SyncArchitecture
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "10.0.11");
@@ -139,11 +142,12 @@ namespace StorageStandby.Backend.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("INTEGER");
 
-                    b.Property<int>("AutomaticSyncIntervalMinutes")
-                        .HasColumnType("INTEGER");
-
                     b.Property<bool>("AutomaticSyncs")
                         .HasColumnType("INTEGER");
+
+                    b.Property<string>("GlobalIgnoreRules")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
 
                     b.Property<bool>("IsSyncPaused")
                         .HasColumnType("INTEGER");
@@ -159,8 +163,8 @@ namespace StorageStandby.Backend.Migrations
                         new
                         {
                             Id = 1,
-                            AutomaticSyncIntervalMinutes = 60,
                             AutomaticSyncs = true,
+                            GlobalIgnoreRules = "*C:/",
                             IsSyncPaused = false
                         });
                 });

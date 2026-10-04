@@ -83,7 +83,8 @@ namespace StorageStandby.Backend.Services
                 System.Net.Sockets.ProtocolType.Tcp))
             {
                 socket.Bind(new System.Net.IPEndPoint(System.Net.IPAddress.Loopback, 0)); // Bind to any available port
-                return ((System.Net.IPEndPoint)socket.LocalEndPoint).Port;
+                return (socket.LocalEndPoint as System.Net.IPEndPoint)?.Port
+                    ?? throw new InvalidOperationException("Failed to determine an available port.");
             }
         }
         // checks whether a specific TCP port is available for use on the local machine

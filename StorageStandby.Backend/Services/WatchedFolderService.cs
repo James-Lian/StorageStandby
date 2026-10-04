@@ -34,24 +34,43 @@ namespace StorageStandby.Backend.Services
         }
         public async Task<CreateWatchedFolderResultDto> CreateWatchedFolder(string path)
         {
+            ArgumentException.ThrowIfNullOrWhiteSpace(path);
+            string normalizedPath = Path.GetFullPath(path)
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
             await using var scope = _scopeFactory.CreateAsyncScope();
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
+            // TODO: 
+            // 1. Health Check first (all paths must be valid)
+            // 2. new WatchedFolder must not be under another WatchedFolder
+
             try
             {
-                bool exists = await db.WatchedFolders.AnyAsync(f => f.LocalPath == path);
+                var existingPaths = await db.WatchedFolders
+                    .Select(folder => folder.LocalPath)
+                    .Where(folderPath => folderPath != null)
+                    .ToListAsync();
+                bool overlaps = existingPaths.Any(existingPath =>
+                {
+                    string normalizedExisting = Path.GetFullPath(existingPath!)
+                        .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                    return string.Equals(normalizedExisting, normalizedPath, StringComparison.OrdinalIgnoreCase)
+                        || IsPathWithin(normalizedExisting, normalizedPath)
+                        || IsPathWithin(normalizedPath, normalizedExisting);
+                });
 
-                if (exists)
+                if (overlaps)
                 {
                     return new CreateWatchedFolderResultDto
                     {
-                        Status = CreateWatchedFolderResultStatus.AlreadyExists,
+                        Status = CreateWatchedFolderResultStatus.Failure,
+                        Details = "Watched folders cannot overlap or contain one another."
                     };
                 }
 
                 db.WatchedFolders.Add(new WatchedFolder
                 {
-                    LocalPath = path,
+                    LocalPath = normalizedPath,
                     DateAdded = DateTime.UtcNow,
                 });
             }
@@ -70,6 +89,12 @@ namespace StorageStandby.Backend.Services
             {
                 Status = CreateWatchedFolderResultStatus.Success,
             };
+        }
+
+        private static bool IsPathWithin(string parentPath, string candidatePath)
+        {
+            string prefix = parentPath + Path.DirectorySeparatorChar;
+            return candidatePath.StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
         }
 
         public async Task DeleteWatchedFolder(string path)
@@ -113,6 +138,68 @@ namespace StorageStandby.Backend.Services
 
             folder.Problem = problem;
             await db.SaveChangesAsync(cancellationToken);
+        }
+
+        public async Task<bool> UpdateWatchedFolderPathAsync(
+            long watchedFolderId,
+            string newPath,
+            CancellationToken cancellationToken = default)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(newPath);
+            string normalizedPath = Path.GetFullPath(newPath)
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
+            await using var scope = _scopeFactory.CreateAsyncScope();
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var folder = await db.WatchedFolders
+                .SingleOrDefaultAsync(item => item.Id == watchedFolderId, cancellationToken);
+            if (folder is null)
+            {
+                return false;
+            }
+
+            string oldPath = folder.LocalPath ?? string.Empty;
+            folder.LocalPath = normalizedPath;
+            string oldPrefix = oldPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                + Path.DirectorySeparatorChar;
+            var pendingItems = await db.PendingSyncQueue
+                .Where(item => item.WatchedFolderId == watchedFolderId && !item.IsTerminal())
+                .ToListAsync(cancellationToken);
+            foreach (var item in pendingItems)
+            {
+                if (!item.LocalPath.StartsWith(oldPrefix, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                item.LocalPath = Path.Combine(
+                    normalizedPath,
+                    Path.GetRelativePath(oldPath, item.LocalPath));
+            }
+            var overlappingFolders = await db.WatchedFolders
+                .Where(item => item.Id != watchedFolderId && item.LocalPath != null)
+                .ToListAsync(cancellationToken);
+            bool hasOverlap = false;
+            foreach (var other in overlappingFolders)
+            {
+                string otherPath = Path.GetFullPath(other.LocalPath!)
+                    .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                if (!string.Equals(otherPath, normalizedPath, StringComparison.OrdinalIgnoreCase)
+                    && !IsPathWithin(otherPath, normalizedPath)
+                    && !IsPathWithin(normalizedPath, otherPath))
+                {
+                    continue;
+                }
+
+                hasOverlap = true;
+                other.Problem = ProblematicFolderType.NestedWatchedFolder;
+            }
+
+            folder.Problem = hasOverlap
+                ? ProblematicFolderType.NestedWatchedFolder
+                : ProblematicFolderType.None;
+            await db.SaveChangesAsync(cancellationToken);
+            return hasOverlap;
         }
 
         public long? GetWatchedFolderIdFromPath(string path)
@@ -165,6 +252,24 @@ namespace StorageStandby.Backend.Services
                 return folder;
             }
             return null;
+        }
+
+        public bool IsPathOwnedByAnotherWatchedFolder(long watchedFolderId, string path)
+        {
+            string normalizedPath = Path.GetFullPath(path)
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            using var scope = _scopeFactory.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            return db.WatchedFolders
+                .Where(folder => folder.Id != watchedFolderId && folder.LocalPath != null)
+                .AsEnumerable()
+                .Any(folder =>
+                {
+                    string root = Path.GetFullPath(folder.LocalPath!)
+                        .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                    return string.Equals(root, normalizedPath, StringComparison.OrdinalIgnoreCase)
+                        || IsPathWithin(root, normalizedPath);
+                });
         }
 
         // https://code.visualstudio.com/docs/editor/glob-patterns <-- Glob patterns reference
@@ -221,6 +326,7 @@ namespace StorageStandby.Backend.Services
                     existingItem.IsFolder = child.IsFolder;
                     if (isIgnored)
                     {
+                        existingItem.OriginalLocalPath ??= existingItem.LocalPath;
                         existingItem.Deleted = true;
                     }
                     else

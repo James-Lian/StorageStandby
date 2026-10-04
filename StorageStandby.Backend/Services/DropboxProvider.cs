@@ -77,6 +77,7 @@ namespace StorageStandby.Backend.Services
             ?? throw new NullReferenceException(_tokenManager.NullReferenceExceptionMsg(Providers.Dropbox, accountId)));
 
             syncEvent.UnfinishedItems = string.Join(";", queue.Select(i => i.LocalPath));
+            syncEvent.UnfinishedItemIds = string.Join(";", queue.Select(i => i.Id));
 
             // retrieving matching watchedfolder using id and also load its associated cloud information
             var watchedFolder = await _db.WatchedFolders
@@ -112,6 +113,8 @@ namespace StorageStandby.Backend.Services
                     succeeded++;
                     syncEvent.SyncedItems = SyncEventPathHelper.AppendPath(syncEvent.SyncedItems, item.LocalPath);
                     syncEvent.UnfinishedItems = SyncEventPathHelper.RemovePath(syncEvent.UnfinishedItems, item.LocalPath);
+                    syncEvent.SyncedItemIds = SyncEventPathHelper.AppendPath(syncEvent.SyncedItemIds, item.Id.ToString());
+                    syncEvent.UnfinishedItemIds = SyncEventPathHelper.RemovePath(syncEvent.UnfinishedItemIds, item.Id.ToString());
                 }
                 catch (OperationCanceledException)
                 {
@@ -154,13 +157,21 @@ namespace StorageStandby.Backend.Services
             CancellationToken cancellationToken
         )
         {
+            if (!item.Deleted && !item.IsFolder && !File.Exists(item.LocalPath))
+            {
+                item.Deleted = true;
+            }
+
             string sourcePath = item.OriginalLocalPath ?? item.LocalPath;
 
             if (item.Deleted)
             {
-                string remotePath = await ResolveRemotePathAsync(
-                    dropboxClient, localRootPath, remoteRootId, sourcePath, cancellationToken)
-                    ?? throw new FileNotFoundException("Remote item to delete was not found.", sourcePath);
+                string? remotePath = await ResolveRemotePathAsync(
+                    dropboxClient, localRootPath, remoteRootId, sourcePath, cancellationToken);
+                if (remotePath is null)
+                {
+                    return;
+                }
                 await dropboxClient.Files.DeleteV2Async(remotePath);
                 return;
             }
@@ -310,6 +321,42 @@ namespace StorageStandby.Backend.Services
         // REST API
         // ----------------------------------------------------------
 
+        public async Task<string> CreateRemoteRootFolderAsync(
+            string accountId,
+            string folderName,
+            CancellationToken cancellationToken = default)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(accountId);
+            ArgumentException.ThrowIfNullOrWhiteSpace(folderName);
+
+            using var client = CreateDropboxClient(_tokenManager.UnencryptRefreshToken(
+                await _tokenManager.GetRefreshTokenAsync(Providers.Dropbox, accountId)
+                ?? throw new NullReferenceException(_tokenManager.NullReferenceExceptionMsg(
+                    Providers.Dropbox,
+                    accountId))));
+            string remotePath = "/" + folderName.Trim('/');
+            await client.Files.CreateFolderV2Async(new CreateFolderArg(remotePath, autorename: false));
+            return remotePath;
+        }
+
+        public async Task DeleteRemoteRootFolderAsync(
+            string accountId,
+            string remoteFolderPath,
+            CancellationToken cancellationToken = default)
+        {
+            if (string.IsNullOrWhiteSpace(remoteFolderPath))
+            {
+                return;
+            }
+
+            using var client = CreateDropboxClient(_tokenManager.UnencryptRefreshToken(
+                await _tokenManager.GetRefreshTokenAsync(Providers.Dropbox, accountId)
+                ?? throw new NullReferenceException(_tokenManager.NullReferenceExceptionMsg(
+                    Providers.Dropbox,
+                    accountId))));
+            await client.Files.DeleteV2Async(remoteFolderPath);
+        }
+
         public async Task<StorageQuotaDto> GetRemainingStorageQuotaAsync(string accountId, CancellationToken cancellationToken=default)
         {
             DropboxClient dropboxClient = CreateDropboxClient(_tokenManager.UnencryptRefreshToken(await _tokenManager.GetRefreshTokenAsync(
@@ -341,7 +388,7 @@ namespace StorageStandby.Backend.Services
         public Task<List<ConnectedAccountDto>> GetConnectedAccounts()
         {
             return _db.CloudTokens
-                .Where(account => account.ProviderName == Providers.Dropbox)
+                .Where(account => account.Provider == Providers.Dropbox)
                 .Select(account => new ConnectedAccountDto
                 {
                     Id = account.AccountId,
