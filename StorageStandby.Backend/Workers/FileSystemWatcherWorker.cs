@@ -32,7 +32,9 @@ namespace StorageStandby.Backend.Workers
         // updating/saving a file can trigger multiple events in quick succession, so we use this cache to "debounce" the events and avoid redundant uploads
         private readonly LocalFileSystemService _fileSystem;
         private readonly WatchedFolderService _watchedFolderService;
+        private readonly SynchronizationService _synchronizationService;
         private CancellationToken _stoppingToken;
+        private DateTime _nextAutomaticSyncUtc = DateTime.MinValue;
 
         private readonly ConcurrentDictionary<long, FileSystemWatcher> _activeWatchers = new(); // WatchedFolderId, FileSystemWatcher
         private readonly ConcurrentDictionary<string, FileSystemWatcher> _activeWatchersParents = new(); // handles renames for WatchedFolders, but TODO: doesn't handle upper-stream naming changes (e.g. a folder rename in the grandfather's directory)
@@ -51,7 +53,8 @@ namespace StorageStandby.Backend.Workers
             BackupEngineState state,
             IMemoryCache cache,
             LocalFileSystemService fileSystem,
-            WatchedFolderService watchedFolderService)
+            WatchedFolderService watchedFolderService,
+            SynchronizationService synchronizationService)
         {
             _logger = logger;
             _scopeFactory = scopeFactory;
@@ -59,6 +62,7 @@ namespace StorageStandby.Backend.Workers
             _cache = cache;
             _fileSystem = fileSystem;
             _watchedFolderService = watchedFolderService;
+            _synchronizationService = synchronizationService;
         }
 
         // DEV: protected override - a method that can only be accessed by this class or derived classes, and overrides a base class method
@@ -79,6 +83,15 @@ namespace StorageStandby.Backend.Workers
                 while (!stoppingToken.IsCancellationRequested)
                 {
                     await SyncWatchersFromDatabaseAsync(stoppingToken);
+                    TimeSpan? automaticInterval = await _synchronizationService
+                        .GetAutomaticSyncIntervalAsync(stoppingToken);
+                    if (!_state.GetSyncPause()
+                        && automaticInterval.HasValue
+                        && DateTime.UtcNow >= _nextAutomaticSyncUtc)
+                    {
+                        await _synchronizationService.ExecuteSyncQueue(stoppingToken);
+                        _nextAutomaticSyncUtc = DateTime.UtcNow.Add(automaticInterval.Value);
+                    }
                     await Task.Delay(5000, stoppingToken);
                 }
             }
@@ -136,7 +149,7 @@ namespace StorageStandby.Backend.Workers
             foreach (var id in configuredFolders)
             {
 
-                WatchedFolder folder = _watchedFolderService.GetWatchedFolderFromId(id);
+                WatchedFolder? folder = _watchedFolderService.GetWatchedFolderFromId(id);
                 if (folder is null)
                 {
                     _logger.LogWarning("Watched folder id invalid (no folder exists): {Id}", id);
@@ -153,6 +166,12 @@ namespace StorageStandby.Backend.Workers
                 {
                     _logger.LogWarning("Watched folder path no longer exists: {Path}", folder.LocalPath);
                 }
+
+                if (!_activeWatchersParents.ContainsKey(id.ToString())
+                    && !string.IsNullOrWhiteSpace(folder.LocalPath))
+                {
+                    await AttachParentWatcherAsync(folder, stoppingToken);
+                }
             }
 
             // 2. Detach watchers for paths deleted from the database
@@ -160,8 +179,119 @@ namespace StorageStandby.Backend.Workers
             {
                 if (!configuredFolders.Contains(existingId))
                 {
-                    DetachWorker(_watchedFolderService.GetWatchedFolderFromId(existingId));
+                    WatchedFolder? folder = _watchedFolderService.GetWatchedFolderFromId(existingId);
+                    if (folder is not null)
+                    {
+                        DetachWorker(folder);
+                    }
                 }
+            }
+
+            foreach (string existingKey in _activeWatchersParents.Keys)
+            {
+                if (long.TryParse(existingKey, out long existingId)
+                    && !configuredFolders.Contains(existingId)
+                    && _activeWatchersParents.TryRemove(existingKey, out var parentWatcher))
+                {
+                    parentWatcher.Dispose();
+                }
+            }
+        }
+
+        private async Task AttachParentWatcherAsync(
+            WatchedFolder folder,
+            CancellationToken stoppingToken)
+        {
+            if (string.IsNullOrWhiteSpace(folder.LocalPath))
+            {
+                return;
+            }
+
+            string? parentPath = Path.GetDirectoryName(folder.LocalPath);
+            string rootName = Path.GetFileName(folder.LocalPath);
+            if (string.IsNullOrWhiteSpace(parentPath)
+                || string.IsNullOrWhiteSpace(rootName)
+                || !Directory.Exists(parentPath))
+            {
+                return;
+            }
+
+            var watcher = new FileSystemWatcher(parentPath)
+            {
+                Filter = rootName,
+                IncludeSubdirectories = false,
+                NotifyFilter = NotifyFilters.DirectoryName
+            };
+            string key = folder.Id.ToString();
+            if (!_activeWatchersParents.TryAdd(key, watcher))
+            {
+                watcher.Dispose();
+                return;
+            }
+
+            watcher.Renamed += (_, args) =>
+                _ = HandleWatchedRootRenamedAsync(folder.Id, args.OldFullPath, args.FullPath, _stoppingToken);
+            watcher.Deleted += (_, args) =>
+                _ = HandleWatchedRootDeletedAsync(folder.Id, args.FullPath, _stoppingToken);
+            watcher.Created += (_, args) =>
+                _logger.LogInformation("Watched root appeared again: {Path}", args.FullPath);
+            watcher.Error += (_, args) =>
+            {
+                _logger.LogError(args.GetException(), "Parent watcher failed for {Path}; it will be reattached.", parentPath);
+                if (_activeWatchersParents.TryRemove(key, out var failedWatcher))
+                {
+                    failedWatcher.Dispose();
+                }
+            };
+            watcher.EnableRaisingEvents = true;
+            await Task.CompletedTask;
+        }
+
+        private async Task HandleWatchedRootRenamedAsync(
+            long watchedFolderId,
+            string oldPath,
+            string newPath,
+            CancellationToken stoppingToken)
+        {
+            bool overlap = await _watchedFolderService.UpdateWatchedFolderPathAsync(
+                watchedFolderId,
+                newPath,
+                stoppingToken);
+            if (overlap)
+            {
+                _logger.LogWarning("Watched folder {Id} moved into another watched folder.", watchedFolderId);
+            }
+
+            if (_activeWatchers.TryRemove(watchedFolderId, out var watcher))
+            {
+                watcher.Dispose();
+            }
+
+            if (_activeWatchersParents.TryRemove(watchedFolderId.ToString(), out var parentWatcher))
+            {
+                parentWatcher.Dispose();
+            }
+
+            var folder = _watchedFolderService.GetWatchedFolderFromId(watchedFolderId);
+            if (folder is not null)
+            {
+                await AttachWatcherAsync(folder, stoppingToken);
+                await AttachParentWatcherAsync(folder, stoppingToken);
+            }
+        }
+
+        private async Task HandleWatchedRootDeletedAsync(
+            long watchedFolderId,
+            string path,
+            CancellationToken stoppingToken)
+        {
+            await _watchedFolderService.SetProblemAsync(
+                watchedFolderId,
+                ProblematicFolderType.PathNotFound,
+                stoppingToken);
+            if (_activeWatchers.TryRemove(watchedFolderId, out var watcher))
+            {
+                watcher.Dispose();
             }
         }
 
@@ -172,10 +302,10 @@ namespace StorageStandby.Backend.Workers
                 if (folder.LocalPath is null) throw new NullReferenceException("WatchedFolder LocalPath is null: " + folder);
                 if (!Directory.Exists(folder.LocalPath)) 
                 { 
-                    folder.Problem = ProblematicFolderType.InvalidPath;
+                    folder.Problem = ProblematicFolderType.PathNotFound;
                     await _watchedFolderService.SetProblemAsync(
                         folder.Id,
-                        ProblematicFolderType.InvalidPath,
+                        ProblematicFolderType.PathNotFound,
                         stoppingToken);
                     throw new FileNotFoundException("WatchedFolder LocalPath: " + folder.LocalPath + " does not exist.");
                 }
@@ -205,6 +335,14 @@ namespace StorageStandby.Backend.Workers
                     OnFileSystemEvent(folder.Id, folder.LocalPath!, e); // external moves are a delete
                 watcher.Renamed += (sender, e) =>
                     OnFileRenamedEvent(folder.Id, folder.LocalPath!, e); // internal moves within the same overarching directory are treated as a rename
+                watcher.Error += (sender, e) =>
+                {
+                    _logger.LogError(e.GetException(), "FileSystemWatcher failed for {Path}; it will be reattached.", folder.LocalPath);
+                    if (_activeWatchers.TryRemove(folder.Id, out var failedWatcher))
+                    {
+                        failedWatcher.Dispose();
+                    }
+                };
 
                 watcher.EnableRaisingEvents = true;
 
@@ -251,8 +389,10 @@ namespace StorageStandby.Backend.Workers
         {
             // checks if this is a duplicate event for the same file path within a short time frame (debouncing)
             if (IsDebounced(e.FullPath)) return;
+            WatchedFolder? folder = _watchedFolderService.GetWatchedFolderFromId(watchedFolderId);
+            if (folder is null || _watchedFolderService.IsPathOwnedByAnotherWatchedFolder(watchedFolderId, e.FullPath)) return;
             // check if the changed file matches the ignore rules glob
-            if (_fileSystem.IsFileIgnored(_watchedFolderService.GetWatchedFolderFromId(watchedFolderId).IgnoreRules, e.FullPath)) return;
+            if (_fileSystem.IsFileIgnored(folder.IgnoreRules, e.FullPath)) return;
 
             if (_trackedFolders.TryGetValue(e.FullPath, out _) || Directory.Exists(e.FullPath))
             {
@@ -270,7 +410,9 @@ namespace StorageStandby.Backend.Workers
             RenamedEventArgs e)
         {
             if (IsDebounced(e.FullPath)) return;
-            if (_fileSystem.IsFileIgnored(_watchedFolderService.GetWatchedFolderFromId(watchedFolderId).IgnoreRules, e.FullPath)) return;
+            WatchedFolder? folder = _watchedFolderService.GetWatchedFolderFromId(watchedFolderId);
+            if (folder is null || _watchedFolderService.IsPathOwnedByAnotherWatchedFolder(watchedFolderId, e.FullPath)) return;
+            if (_fileSystem.IsFileIgnored(folder.IgnoreRules, e.FullPath)) return;
 
             _logger.LogInformation("File renamed: {OldPath} -> {NewPath}", e.OldFullPath, e.FullPath);
 
@@ -326,6 +468,7 @@ namespace StorageStandby.Backend.Workers
         private async Task SetDeletePendingSyncItem(
             Func<PendingSyncItem, bool> searchConditions,
             Action<PendingSyncItem> callback,
+            PendingSyncItem syncItem,
             CancellationToken stoppingToken)
         {
             await using var scope = _scopeFactory.CreateAsyncScope();
@@ -338,6 +481,11 @@ namespace StorageStandby.Backend.Workers
             if (item is not null)
             {
                 callback(item);
+                _ = await db.SaveChangesAsync(stoppingToken);
+            }
+            else
+            {
+                db.PendingSyncQueue.Add(syncItem);
                 _ = await db.SaveChangesAsync(stoppingToken);
             }
         }
@@ -393,14 +541,24 @@ namespace StorageStandby.Backend.Workers
                 {
                     item.Deleted = true;
                 }
-                await SetDeletePendingSyncItem(syncItemSearch, syncItemUpdate, stoppingToken);
+                await SetDeletePendingSyncItem(
+                    syncItemSearch,
+                    syncItemUpdate,
+                    new PendingSyncItem
+                    {
+                        WatchedFolderId = watchedFolderId,
+                        LocalPath = filePath,
+                        OriginalLocalPath = filePath,
+                        Deleted = true
+                    },
+                    stoppingToken);
             }
             else if (changeType == "Renamed" && oldFilePath != null) // renames or moves
             {
                 // differentiate between moves and renames
 
-                string oldDirectory = Path.GetDirectoryName(oldFilePath);
-                string newDirectory = Path.GetDirectoryName(filePath);
+                string oldDirectory = Path.GetDirectoryName(oldFilePath) ?? string.Empty;
+                string newDirectory = Path.GetDirectoryName(filePath) ?? string.Empty;
 
                 bool isSameDirectory = string.Equals(oldDirectory, newDirectory, StringComparison.OrdinalIgnoreCase);
 
@@ -551,7 +709,18 @@ namespace StorageStandby.Backend.Workers
                     item.IsFolder = true;
                     item.Deleted = true;
                 }
-                await SetDeletePendingSyncItem(syncItemSearch, syncItemUpdate, stoppingToken);
+                await SetDeletePendingSyncItem(
+                    syncItemSearch,
+                    syncItemUpdate,
+                    new PendingSyncItem
+                    {
+                        WatchedFolderId = watchedFolderId,
+                        LocalPath = folderPath,
+                        OriginalLocalPath = folderPath,
+                        IsFolder = true,
+                        Deleted = true
+                    },
+                    stoppingToken);
                 await MarkDeletedFolderContentsAsync(watchedFolderId, folderPath, stoppingToken);
             }
             else if (changeType == "Renamed")

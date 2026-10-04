@@ -42,6 +42,7 @@ builder.Services.AddDbContext<AppDbContext>(options =>
 });
 builder.Services.AddScoped<GoogleDriveProvider>();
 builder.Services.AddScoped<OneDriveProvider>();
+builder.Services.AddScoped<DropboxProvider>();
 builder.Services.AddHostedService<FileSystemWatcherWorker>(); // configures as a background service, akin to a singleton
 builder.Services.AddMemoryCache();
 
@@ -50,11 +51,11 @@ builder.Services.AddHttpClient<GoogleDriveProvider>()
     .SetHandlerLifetime(TimeSpan.FromMinutes(5));
 builder.Services.AddHttpClient<OneDriveProvider>()
     .SetHandlerLifetime(TimeSpan.FromMinutes(5));
+builder.Services.AddHttpClient<DropboxProvider>()
+    .SetHandlerLifetime(TimeSpan.FromMinutes(5));
 // Register Providers typed client and configure HttpClientFactory handler rotation (prevents stale DNS)
 foreach (Providers provider in Enum.GetValues<Providers>())
 {
-    if (provider == Providers.None) continue;
-
     builder.Services.AddHttpClient(ProviderMetadata.ProviderNames[provider])
         .SetHandlerLifetime(TimeSpan.FromMinutes(5));
 
@@ -102,7 +103,6 @@ using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
     var state = scope.ServiceProvider.GetRequiredService<BackupEngineState>();
-    var googleDriveProvider = scope.ServiceProvider.GetRequiredService<GoogleDriveProvider>();
     var tokenManager = scope.ServiceProvider.GetRequiredService<TokenManager>();
 
     try
@@ -121,7 +121,11 @@ using (var scope = app.Services.CreateScope())
     //db.Database.EnsureCreated(); // <-- dev-only
 
     // log saved folders into state machine
-    var savedFolders = db.WatchedFolders.Select(f => f.LocalPath).ToList();
+    var savedFolders = db.WatchedFolders
+        .Select(f => f.LocalPath)
+        .Where(path => path != null)
+        .Cast<string>()
+        .ToList();
     state.ActiveWatchedPaths.AddRange(savedFolders);
 }
 
@@ -164,7 +168,7 @@ app.MapMethods("/api/{**path}", new[] { "OPTIONS" }, () => Results.NoContent());
 app.MapGet("/api/status", (BackupEngineState state) => Results.Ok(new
 {
     Status = state.Status,
-    IsPaused = state._isSyncPaused,
+    IsPaused = state.GetSyncPause(),
     CurrentOperation = state.CurrentOperation,
     LastSyncedFile = state.LastSyncedFile,
     QueueCount = state.ActiveUploadQueueCount,
@@ -174,31 +178,39 @@ app.MapGet("/api/status", (BackupEngineState state) => Results.Ok(new
 // POST: React toggling the pause button
 app.MapPost("/api/sync/pause", (bool pauseState, BackupEngineState state) =>
 {
-    state._isSyncPaused = pauseState;
+    state.SetSyncPause(pauseState);
     state.Status = pauseState ? "Paused" : "Running";
-    return Results.Ok(new { Paused = state._isSyncPaused });
+    return Results.Ok(new { Paused = state.GetSyncPause() });
 });
 
-app.MapPost("/api/sync/trigger", () =>
+app.MapPost("/api/sync/trigger", async (
+    SynchronizationService synchronizationService,
+    CancellationToken cancellationToken) =>
 {
-    // TODO: Trigger a manual sync operation in your backup engine
-    return Results.Ok(new { Message = "Sync initiated successfully." });
+    await synchronizationService.ExecuteSyncQueue(cancellationToken);
+    return Results.Ok(new { Message = "Sync completed or recorded unfinished work." });
 });
 
 // POST: React adding a new folder to track
 app.MapPost("/api/folders/add", async (
     WatchedFolder request, 
-    AppDbContext db, 
+    WatchedFolderService watchedFolderService,
     BackupEngineState state) =>
 {
-    // check if it already exists
-    if (db.WatchedFolders.Any(f => f.LocalPath == request.LocalPath))
+    if (string.IsNullOrWhiteSpace(request.LocalPath))
+    {
+        return Results.BadRequest(new { Message = "A local folder path is required." });
+    }
+
+    var result = await watchedFolderService.CreateWatchedFolder(request.LocalPath);
+    if (result.Status == WatchedFolderService.CreateWatchedFolderResultStatus.AlreadyExists)
     {
         return Results.Conflict(new { Message = "Folder is already being tracked." });
     }
-
-    db.WatchedFolders.Add(request);
-    await db.SaveChangesAsync();
+    if (result.Status == WatchedFolderService.CreateWatchedFolderResultStatus.Failure)
+    {
+        return Results.BadRequest(new { Message = result.Details });
+    }
 
     state.NotifyNewFolderAdded(request.LocalPath);
 
@@ -255,11 +267,70 @@ app.MapGet("/api/folders/{localPath}", async (
     return Results.Ok(folder);
 });
 
-// public record IgnoreRulesChangeRequest(string OldIgnoreRules, string NewIgnoreRules);
+app.MapPost("/api/folders/{watchedFolderId:long}/resync", async (
+    long watchedFolderId,
+    string? localPath,
+    SynchronizationService synchronizationService,
+    CancellationToken cancellationToken) =>
+{
+    await synchronizationService.QueueResyncAsync(
+        watchedFolderId,
+        localPath,
+        cancellationToken);
+    return Results.Ok(new { Message = "Resync queued." });
+});
+
+app.MapPost("/api/folders/{watchedFolderId:long}/clouds", async (
+    long watchedFolderId,
+    ProviderAccountCloud request,
+    AppDbContext db,
+    SynchronizationService synchronizationService,
+    CancellationToken cancellationToken) =>
+{
+    var folder = await db.WatchedFolders
+        .Include(item => item.AssignedClouds)
+        .SingleOrDefaultAsync(item => item.Id == watchedFolderId, cancellationToken);
+    if (folder is null)
+    {
+        return Results.NotFound(new { Message = "Folder not found." });
+    }
+
+    await synchronizationService.AddToAssignedCloud(
+        folder,
+        request.Provider,
+        request.AccountId,
+        cancellationToken);
+    return Results.Ok(new { Message = "Cloud assignment added." });
+});
+
+app.MapDelete("/api/folders/{watchedFolderId:long}/clouds/{provider}/{accountId}", async (
+    long watchedFolderId,
+    Providers provider,
+    string accountId,
+    AppDbContext db,
+    SynchronizationService synchronizationService,
+    CancellationToken cancellationToken) =>
+{
+    var folder = await db.WatchedFolders
+        .Include(item => item.AssignedClouds)
+        .SingleOrDefaultAsync(item => item.Id == watchedFolderId, cancellationToken);
+    if (folder is null)
+    {
+        return Results.NotFound(new { Message = "Folder not found." });
+    }
+
+    await synchronizationService.RemoveFromAssignedCloud(
+        folder,
+        provider,
+        accountId,
+        cancellationToken);
+    return Results.Ok(new { Message = "Cloud assignment removed." });
+});
+
 app.MapPost("/api/folders/{watchedFolderId:long}/ignore-rules/reconcile", async (
     long watchedFolderId,
-    // IgnoreRulesChangeRequest request,
-    FileSystemWatcherWorker watcherWorker,
+    IgnoreRulesChangeRequest request,
+    WatchedFolderService watchedFolderService,
     AppDbContext db,
     CancellationToken cancellationToken) =>
 {
@@ -269,7 +340,7 @@ app.MapPost("/api/folders/{watchedFolderId:long}/ignore-rules/reconcile", async 
         return Results.NotFound(new { Message = "Folder not found." });
     }
 
-    await watcherWorker.ReconcileIgnoreRulesAsync(
+    await watchedFolderService.ReconcileIgnoreRulesAsync(
         watchedFolderId,
         request.OldIgnoreRules,
         request.NewIgnoreRules,
@@ -291,28 +362,6 @@ app.MapGet("/api/settings", (AppDbContext db) =>
         return Results.NotFound(new { Message = "Settings not found." });
     }
     return Results.Ok(settings);
-});
-
-app.MapGet("/api/settings/globalignore", (AppDbContext db) =>
-{
-    var settings = db.SystemSettings.FirstOrDefault();
-    if (settings == null)
-    {
-        return Results.NotFound(new { Message = "Settings not found." });
-    }
-    return Results.Ok(settings.GlobalIgnoreRules);
-});
-
-app.MapPost("/api/settings/globalignore", async (string ignoreRules, AppDbContext db) =>
-{
-    var settings = await db.SystemSettings.FirstOrDefaultAsync();
-    if (settings == null)
-    {
-        return Results.NotFound(new { Message = "Settings not found." });
-    }
-    settings.GlobalIgnoreRules = ignoreRules;
-    db.SaveChanges();
-    return Results.Ok(new { Message = "Global ignore rules updated successfully." });
 });
 
 // -------------------------------------------------------------------
@@ -422,7 +471,9 @@ await app.RunAsync();
 // TYPES
 // -------------------------------------------------------------------
 
+public record IgnoreRulesChangeRequest(string OldIgnoreRules, string NewIgnoreRules);
+
 public class RevokeReq
 {
-    public string AccountId { get; set; }
+    public string AccountId { get; set; } = string.Empty;
 }

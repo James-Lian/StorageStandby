@@ -1,6 +1,4 @@
-﻿using System.Text.Json;
-
-namespace StorageStandby.Backend.Models
+﻿namespace StorageStandby.Backend.Models
 {
 
     public enum SyncEventType
@@ -26,10 +24,12 @@ namespace StorageStandby.Backend.Models
         // ----------------------------------------------------------
         // Sync Event information
         public Providers Provider { get; set; }
-        public string AccountId { get; set; }
+        public string AccountId { get; set; } = string.Empty;
         public string SyncedItems { get; set; } = string.Empty; // semicolon delimited - files
+        public string SyncedItemIds { get; set; } = string.Empty;
         public List<FailedItemsDetails> FailedItems { get; set; } = [];
         public string UnfinishedItems { get; set; } = string.Empty;
+        public string UnfinishedItemIds { get; set; } = string.Empty;
     }
 
     public class FailedItemsDetails

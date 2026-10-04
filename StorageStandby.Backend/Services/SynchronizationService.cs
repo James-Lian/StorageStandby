@@ -1,6 +1,4 @@
-using System.Data.Common;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.EntityFrameworkCore.Query.Internal;
 using StorageStandby.Backend.Data;
 using StorageStandby.Backend.Models;
 using StorageStandby.Backend.Services;
@@ -36,8 +34,12 @@ namespace StorageStandby.Backend.Core
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
             var alteredFoldersIds = await db.PendingSyncQueue
-                .Select(i => i.WatchedFolderId) // project only WatchedFolderId property
-                .Distinct() // Ensure uniqueness
+                .Select(i => i.WatchedFolderId)
+                .Union(db.WatchedFolderCloudMetadata
+                    .Where(cloud => cloud.State == CloudAssignmentState.PendingBootstrap
+                        || cloud.State == CloudAssignmentState.Failed)
+                    .Select(cloud => cloud.WatchedFolderId))
+                .Distinct()
                 .ToListAsync(cancellationToken);
 
             // 2. Iterate through them: choose a provider and an account, perform upload
@@ -65,10 +67,44 @@ namespace StorageStandby.Backend.Core
                     continue;
                 }
 
-                bool allDestinationsSucceeded = true;
+                var activeDestinations = watchedFolder.AssignedClouds
+                    .Where(cloud => cloud.State == CloudAssignmentState.Active)
+                    .Select(cloud => new ProviderAccountCloud
+                    {
+                        Provider = cloud.Provider,
+                        AccountId = cloud.AccountId
+                    })
+                    .DistinctBy(cloud => (cloud.Provider, cloud.AccountId))
+                    .ToList();
+                var completedForAllDestinations = new HashSet<long>();
+                bool processedDestination = false;
+
                 foreach (var destination in destinations)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
+
+                    var metadata = watchedFolder.AssignedClouds.Single(cloud =>
+                        cloud.Provider == destination.Provider
+                        && cloud.AccountId == destination.AccountId);
+                    bool isBootstrap = metadata.State != CloudAssignmentState.Active;
+                    List<PendingSyncItem> destinationQueue = isBootstrap
+                        ? BuildBootstrapQueue(watchedFolder)
+                        : await GetOutstandingQueueForCloudAsync(
+                            db,
+                            id,
+                            destination,
+                            queue,
+                            cancellationToken);
+                    if (destinationQueue.Count == 0)
+                    {
+                        continue;
+                    }
+
+                    processedDestination = true;
+                    metadata.State = isBootstrap
+                        ? CloudAssignmentState.Bootstrapping
+                        : CloudAssignmentState.Active;
+                    metadata.LastError = null;
 
                     var syncEvent = new SyncEvent
                     {
@@ -97,7 +133,12 @@ namespace StorageStandby.Backend.Core
                                 cancellationToken),
                             Providers.Microsoft => await ExecuteMicrosoftSyncAsync(
                                 syncEvent,
-                                queue,
+                                destinationQueue,
+                                destination.AccountId,
+                                cancellationToken),
+                            Providers.Dropbox => await ExecuteDropboxSyncAsync(
+                                syncEvent,
+                                destinationQueue,
                                 destination.AccountId,
                                 cancellationToken),
                             // _ => catch-all
@@ -105,7 +146,23 @@ namespace StorageStandby.Backend.Core
                                 $"Queue execution is not implemented for {destination.Provider}.")
                         };
 
-                        allDestinationsSucceeded &= result.Status == SyncEventType.Succeeded;
+                        syncEvent.CompletionType = result.Status;
+                        syncEvent.CompletedTimestamp = DateTime.UtcNow;
+                        if (result.Status == SyncEventType.Succeeded)
+                        {
+                            metadata.State = CloudAssignmentState.Active;
+                            if (!isBootstrap)
+                            {
+                                foreach (var item in destinationQueue)
+                                {
+                                    completedForAllDestinations.Add(item.Id);
+                                }
+                            }
+                        }
+                        else
+                        {
+                            metadata.State = CloudAssignmentState.Failed;
+                        }
                     }
                     catch (OperationCanceledException)
                     {
@@ -113,7 +170,8 @@ namespace StorageStandby.Backend.Core
                     }
                     catch (Exception ex)
                     {
-                        allDestinationsSucceeded = false;
+                        metadata.State = CloudAssignmentState.Failed;
+                        metadata.LastError = ex.Message;
                         syncEvent.CompletionType = SyncEventType.Unfinished;
                         syncEvent.CompletedTimestamp = DateTime.UtcNow;
                         syncEvent.FailedItems.Add(new FailedItemsDetails
@@ -126,14 +184,112 @@ namespace StorageStandby.Backend.Core
                     await db.SaveChangesAsync(cancellationToken);
                 }
 
-                if (allDestinationsSucceeded)
+                if (processedDestination && activeDestinations.Count > 0)
                 {
-                    db.PendingSyncQueue.RemoveRange(queue);
+                    var successfulClouds = await GetSuccessfulCloudsForItemsAsync(
+                        db,
+                        id,
+                        activeDestinations,
+                        queue,
+                        cancellationToken);
+                    var completedItemIds = queue
+                        .Where(item => successfulClouds.All(cloud => cloud.Contains(item.Id)))
+                        .Select(item => item.Id)
+                        .ToHashSet();
+                    db.PendingSyncQueue.RemoveRange(queue.Where(item => completedItemIds.Contains(item.Id)));
+                }
+
+                if (processedDestination && watchedFolder.AssignedClouds.Any(cloud =>
+                        cloud.State == CloudAssignmentState.Active))
+                {
                     watchedFolder.LastSync = DateTime.UtcNow;
                     await db.SaveChangesAsync(cancellationToken);
                 }
             }
 
+        }
+
+        private List<PendingSyncItem> BuildBootstrapQueue(WatchedFolder folder)
+        {
+            if (string.IsNullOrWhiteSpace(folder.LocalPath) || !Directory.Exists(folder.LocalPath))
+            {
+                return [];
+            }
+
+            var items = new List<PendingSyncItem>();
+            foreach (string path in Directory.EnumerateDirectories(folder.LocalPath, "*", SearchOption.AllDirectories)
+                .Where(path => !_fileSystem.IsFileIgnored(folder.IgnoreRules, path)))
+            {
+                items.Add(new PendingSyncItem
+                {
+                    LocalPath = path,
+                    IsFolder = true,
+                    Created = true
+                });
+            }
+
+            foreach (string path in Directory.EnumerateFiles(folder.LocalPath, "*", SearchOption.AllDirectories)
+                .Where(path => !_fileSystem.IsFileIgnored(folder.IgnoreRules, path)))
+            {
+                items.Add(new PendingSyncItem
+                {
+                    LocalPath = path,
+                    Created = true
+                });
+            }
+
+            return items;
+        }
+
+        private async Task<List<PendingSyncItem>> GetOutstandingQueueForCloudAsync(
+            AppDbContext db,
+            long watchedFolderId,
+            ProviderAccountCloud destination,
+            IReadOnlyList<PendingSyncItem> queue,
+            CancellationToken cancellationToken)
+        {
+            var completedIds = await db.SyncEvents
+                .Where(syncEvent => syncEvent.WatchedFolderId == watchedFolderId
+                    && syncEvent.Provider == destination.Provider
+                    && syncEvent.AccountId == destination.AccountId)
+                .OrderByDescending(syncEvent => syncEvent.Id)
+                .Select(syncEvent => syncEvent.SyncedItemIds)
+                .FirstOrDefaultAsync(cancellationToken);
+
+            var completed = ParseIds(completedIds);
+            return queue.Where(item => !completed.Contains(item.Id)).ToList();
+        }
+
+        private async Task<List<HashSet<long>>> GetSuccessfulCloudsForItemsAsync(
+            AppDbContext db,
+            long watchedFolderId,
+            IReadOnlyList<ProviderAccountCloud> destinations,
+            IReadOnlyList<PendingSyncItem> queue,
+            CancellationToken cancellationToken)
+        {
+            var results = new List<HashSet<long>>();
+            foreach (var destination in destinations)
+            {
+                string? ids = await db.SyncEvents
+                    .Where(syncEvent => syncEvent.WatchedFolderId == watchedFolderId
+                        && syncEvent.Provider == destination.Provider
+                        && syncEvent.AccountId == destination.AccountId)
+                    .OrderByDescending(syncEvent => syncEvent.Id)
+                    .Select(syncEvent => syncEvent.SyncedItemIds)
+                    .FirstOrDefaultAsync(cancellationToken);
+                results.Add(ParseIds(ids));
+            }
+
+            return results;
+        }
+
+        private static HashSet<long> ParseIds(string? value)
+        {
+            return (value ?? string.Empty)
+                .Split(';', StringSplitOptions.RemoveEmptyEntries)
+                .Select(id => long.TryParse(id, out long parsed) ? parsed : 0)
+                .Where(id => id > 0)
+                .ToHashSet();
         }
 
         private async Task ReconcileRemoteFolderAsync(
@@ -142,11 +298,6 @@ namespace StorageStandby.Backend.Core
             ProviderAccountCloud destination,
             CancellationToken cancellationToken)
         {
-            if (destination.Provider != Providers.Google)
-            {
-                return;
-            }
-
             var cloud = watchedFolder.AssignedClouds.SingleOrDefault(metadata =>
                 metadata.Provider == destination.Provider
                 && metadata.AccountId == destination.AccountId);
@@ -164,23 +315,35 @@ namespace StorageStandby.Backend.Core
             }
 
             await using var scope = _scopeFactory.CreateAsyncScope();
-            var provider = scope.ServiceProvider.GetRequiredService<GoogleDriveProvider>();
-
-            if (!string.IsNullOrWhiteSpace(cloud.RemoteFolderId)
-                && await provider.RemoteFolderExistsAsync(
-                    destination.AccountId,
-                    cloud.RemoteFolderId,
-                    cancellationToken))
+            bool exists = destination.Provider switch
+            {
+                Providers.Google => await scope.ServiceProvider
+                    .GetRequiredService<GoogleDriveProvider>()
+                    .RemoteFolderExistsAsync(destination.AccountId, cloud.RemoteFolderId, cancellationToken),
+                _ => !string.IsNullOrWhiteSpace(cloud.RemoteFolderId)
+            };
+            if (exists)
             {
                 return;
             }
 
             string folderName = Path.GetFileName(
                 watchedFolder.LocalPath!.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
-            cloud.RemoteFolderId = await provider.CreateRemoteRootFolderAsync(
-                destination.AccountId,
-                folderName,
-                cancellationToken);
+            cloud.RemoteFolderId = destination.Provider switch
+            {
+                Providers.Google => await scope.ServiceProvider
+                    .GetRequiredService<GoogleDriveProvider>()
+                    .CreateRemoteRootFolderAsync(destination.AccountId, folderName, cancellationToken),
+                Providers.Microsoft => await scope.ServiceProvider
+                    .GetRequiredService<OneDriveProvider>()
+                    .CreateRemoteRootFolderAsync(destination.AccountId, folderName, cancellationToken),
+                Providers.Dropbox => await scope.ServiceProvider
+                    .GetRequiredService<DropboxProvider>()
+                    .CreateRemoteRootFolderAsync(destination.AccountId, folderName, cancellationToken),
+                _ => throw new NotSupportedException(
+                    $"Remote root creation is not implemented for {destination.Provider}.")
+            };
+            cloud.State = CloudAssignmentState.Bootstrapping;
             await db.SaveChangesAsync(cancellationToken);
         }
 
@@ -214,162 +377,122 @@ namespace StorageStandby.Backend.Core
                 cancellationToken);
         }
 
-        // If manually managed:
-        // 1. Check the AssignedClouds for previous syncs and add them to the list
-        
-        // 2. Check the preferred provider (if applicable; if not added to assigned clouds, add)
-        // 3. Check global preferred provider (if applicable)
-        // 4. Else (or if not enough space in any of the other clouds), find the cloud with the most amount of space (only if new upload - otherwise, move it)
+        private async Task<SyncResult> ExecuteDropboxSyncAsync(
+            SyncEvent syncEvent,
+            IReadOnlyList<PendingSyncItem> queue,
+            string accountId,
+            CancellationToken cancellationToken)
+        {
+            await using var scope = _scopeFactory.CreateAsyncScope();
+            var provider = scope.ServiceProvider.GetRequiredService<DropboxProvider>();
+            return await provider.ExecuteSyncQueueAsync(
+                syncEvent,
+                accountId,
+                queue,
+                cancellationToken);
+        }
+
         public async Task<List<ProviderAccountCloud>> DetermineSyncDestinations(
             WatchedFolder folder,
             CancellationToken cancellationToken = default)
         {
             ArgumentNullException.ThrowIfNull(folder);
-
-            // retrieve destinations
-            List<ProviderAccountCloud> destinations = [];
-            if (folder.AssignedClouds.Count == 0)
-            {
-                return destinations;
-            }
-
-            // calculate necessary storage for full upload
-            long requiredBytes = _fileSystem.GetWatchedFolderSize(folder, cancellationToken);
-            var systemSettings = await ReadSystemSettingsAsync(cancellationToken);
-
-            var availableClouds = folder.AssignedClouds
+            await Task.CompletedTask;
+            return folder.AssignedClouds
+                .Where(cloud => !string.IsNullOrWhiteSpace(cloud.AccountId))
                 .Select(cloud => new ProviderAccountCloud
                 {
                     Provider = cloud.Provider,
                     AccountId = cloud.AccountId
                 })
-                .Where(cloud => !string.IsNullOrWhiteSpace(cloud.AccountId))
                 .DistinctBy(cloud => (cloud.Provider, cloud.AccountId))
                 .ToList();
-
-            var preferredProviders = new[]
-            {
-                folder.PreferredProvider,
-                systemSettings?.GlobalPreferredProvider
-            }
-                .Where(provider => provider.HasValue)
-                .Select(provider => provider!.Value)
-                .Distinct()
-                .ToList();
-
-            availableClouds.AddRange(await ReadConnectedCloudsAsync(
-                preferredProviders,
-                cancellationToken));
-            availableClouds = availableClouds
-                .DistinctBy(cloud => (cloud.Provider, cloud.AccountId))
-                .ToList();
-
-            var quotaByCloud = new Dictionary<(Providers Provider, string AccountId), long>();
-            foreach (var cloud in availableClouds)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                try
-                {
-                    quotaByCloud[(cloud.Provider, cloud.AccountId)] =
-                        await GetRemainingStorageQuotaAsync(cloud, cancellationToken);
-                }
-                catch (Exception ex) when (ex is NotSupportedException or NotImplementedException)
-                {
-                    // Providers without a quota implementation are not eligible for automatic selection.
-                }
-            }
-
-            bool HasCapacity(ProviderAccountCloud cloud) =>
-                quotaByCloud.TryGetValue((cloud.Provider, cloud.AccountId), out long remaining)
-                && remaining >= requiredBytes;
-
-            void AddIfEligible(Providers? provider)
-            {
-                if (!provider.HasValue) return;
-
-                foreach (var cloud in availableClouds.Where(cloud => cloud.Provider == provider.Value))
-                {
-                    if (HasCapacity(cloud) && !destinations.Any(destination =>
-                            destination.Provider == cloud.Provider && destination.AccountId == cloud.AccountId))
-                    {
-                        destinations.Add(cloud);
-                    }
-                }
-            }
-
-            AddIfEligible(folder.PreferredProvider);
-            AddIfEligible(systemSettings?.GlobalPreferredProvider);
-
-            foreach (var cloud in availableClouds
-                .Where(HasCapacity)
-                .OrderBy(cloud => quotaByCloud[(cloud.Provider, cloud.AccountId)]))
-            {
-                if (!destinations.Any(destination =>
-                        destination.Provider == cloud.Provider && destination.AccountId == cloud.AccountId))
-                {
-                    destinations.Add(cloud);
-                }
-            }
-
-            return destinations;
         }
 
-        private async Task<SystemSettings?> ReadSystemSettingsAsync(CancellationToken cancellationToken)
+        public async Task QueueResyncAsync(
+            long watchedFolderId,
+            string? localPath = null,
+            CancellationToken cancellationToken = default)
         {
             await using var scope = _scopeFactory.CreateAsyncScope();
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-            return await db.SystemSettings.SingleOrDefaultAsync(cancellationToken);
-        }
-
-        private async Task<List<ProviderAccountCloud>> ReadConnectedCloudsAsync(
-            IReadOnlyCollection<Providers> providers,
-            CancellationToken cancellationToken)
-        {
-            if (providers.Count == 0)
+            var folder = await db.WatchedFolders
+                .SingleOrDefaultAsync(item => item.Id == watchedFolderId, cancellationToken)
+                ?? throw new InvalidOperationException($"Watched folder does not exist: {watchedFolderId}");
+            if (string.IsNullOrWhiteSpace(folder.LocalPath) || !Directory.Exists(folder.LocalPath))
             {
-                return [];
+                throw new DirectoryNotFoundException(folder.LocalPath);
             }
 
-            await using var scope = _scopeFactory.CreateAsyncScope();
-            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-            return await db.CloudTokens
-                .Where(token => providers.Contains(token.ProviderName)
-                    && token.Status == ConnectionStatus.Connected)
-                .Select(token => new ProviderAccountCloud
-                {
-                    Provider = token.ProviderName,
-                    AccountId = token.AccountId
-                })
+            string root = string.IsNullOrWhiteSpace(localPath)
+                ? folder.LocalPath
+                : Path.GetFullPath(localPath);
+            if (!root.StartsWith(folder.LocalPath, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new ArgumentException("The resync path must be inside the watched folder.", nameof(localPath));
+            }
+
+            var paths = new List<(string Path, bool IsFolder)>();
+            if (Directory.Exists(root))
+            {
+                paths.Add((root, true));
+                paths.AddRange(Directory.EnumerateDirectories(root, "*", SearchOption.AllDirectories)
+                    .Select(path => (path, true)));
+                paths.AddRange(Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories)
+                    .Select(path => (path, false)));
+            }
+            else if (File.Exists(root))
+            {
+                paths.Add((root, false));
+            }
+
+            paths = paths
+                .Where(item => !_fileSystem.IsFileIgnored(folder.IgnoreRules, item.Path))
+                .ToList();
+            var pathValues = paths.Select(item => item.Path).ToList();
+            var activeItems = await db.PendingSyncQueue
+                .Where(item => item.WatchedFolderId == watchedFolderId
+                    && pathValues.Contains(item.LocalPath)
+                    && !item.IsTerminal())
                 .ToListAsync(cancellationToken);
-        }
+            var activeByPath = activeItems.ToDictionary(
+                item => item.LocalPath,
+                StringComparer.OrdinalIgnoreCase);
 
-        private Task<StorageQuotaDto> GetRemainingStorageQuotaAsync(
-            ProviderAccountCloud cloud,
-            CancellationToken cancellationToken)
-        {
-            return cloud.Provider switch
+            foreach (var (path, isFolder) in paths)
             {
-                Providers.Google => GetGoogleRemainingStorageAsync(cloud.AccountId, cancellationToken),
-                Providers.Microsoft => GetOneDriveRemainingStorageAsync(cloud.AccountId),
-                _ => throw new NotSupportedException($"Storage quota is not implemented for {cloud.Provider}.")
-            };
+                if (activeByPath.TryGetValue(path, out var existing))
+                {
+                    existing.IsFolder = isFolder;
+                    existing.Changed = !isFolder;
+                    existing.Created = isFolder;
+                    continue;
+                }
+
+                db.PendingSyncQueue.Add(new PendingSyncItem
+                {
+                    WatchedFolderId = watchedFolderId,
+                    LocalPath = path,
+                    IsFolder = isFolder,
+                    Created = true
+                });
+            }
+
+            await db.SaveChangesAsync(cancellationToken);
         }
 
-        private async Task<StorageQuotaDto> GetGoogleRemainingStorageAsync(
-            string accountId,
-            CancellationToken cancellationToken)
+        public async Task<TimeSpan?> GetAutomaticSyncIntervalAsync(
+            CancellationToken cancellationToken = default)
         {
             await using var scope = _scopeFactory.CreateAsyncScope();
-            var provider = scope.ServiceProvider.GetRequiredService<GoogleDriveProvider>();
-            return await provider.GetRemainingStorageQuotaAsync(accountId, cancellationToken);
-        }
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var settings = await db.SystemSettings.SingleOrDefaultAsync(cancellationToken);
+            if (settings is null || !settings.AutomaticSyncs)
+            {
+                return null;
+            }
 
-        private async Task<long> GetOneDriveRemainingStorageAsync(string accountId)
-        {
-            await using var scope = _scopeFactory.CreateAsyncScope();
-            var provider = scope.ServiceProvider.GetRequiredService<OneDriveProvider>();
-            var quota = await provider.GetRemainingStorageQuotaAsync(accountId);
-            return Math.Max(0, quota.RemainingBytes);
+            return TimeSpan.FromMinutes(Math.Max(1, settings.AutomaticSyncIntervalMinutes));
         }
 
         // 1. Remove from AssignedClouds
@@ -382,16 +505,6 @@ namespace StorageStandby.Backend.Core
         {
             ArgumentNullException.ThrowIfNull(folder);
             ArgumentException.ThrowIfNullOrWhiteSpace(accountId);
-
-            if (provider == Providers.None)
-            {
-                throw new ArgumentException("A real cloud provider is required.", nameof(provider));
-            }
-            if (provider != Providers.Google)
-            {
-                throw new NotSupportedException(
-                    $"Removing an assigned cloud is not implemented for {provider}.");
-            }
 
             await using var scope = _scopeFactory.CreateAsyncScope();
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
@@ -409,11 +522,24 @@ namespace StorageStandby.Backend.Core
 
             if (!string.IsNullOrWhiteSpace(cloudMetadataToRemove.RemoteFolderId))
             {
-                var providerService = scope.ServiceProvider.GetRequiredService<GoogleDriveProvider>();
-                await providerService.DeleteRemoteRootFolderAsync(
-                    accountId,
-                    cloudMetadataToRemove.RemoteFolderId,
-                    cancellationToken);
+                switch (provider)
+                {
+                    case Providers.Google:
+                        await scope.ServiceProvider.GetRequiredService<GoogleDriveProvider>()
+                            .DeleteRemoteRootFolderAsync(accountId, cloudMetadataToRemove.RemoteFolderId, cancellationToken);
+                        break;
+                    case Providers.Microsoft:
+                        await scope.ServiceProvider.GetRequiredService<OneDriveProvider>()
+                            .DeleteRemoteRootFolderAsync(accountId, cloudMetadataToRemove.RemoteFolderId, cancellationToken);
+                        break;
+                    case Providers.Dropbox:
+                        await scope.ServiceProvider.GetRequiredService<DropboxProvider>()
+                            .DeleteRemoteRootFolderAsync(accountId, cloudMetadataToRemove.RemoteFolderId, cancellationToken);
+                        break;
+                    default:
+                        throw new NotSupportedException(
+                            $"Removing an assigned cloud is not implemented for {provider}.");
+                }
             }
 
             db.WatchedFolderCloudMetadata.Remove(cloudMetadataToRemove);
@@ -432,11 +558,6 @@ namespace StorageStandby.Backend.Core
         {
             ArgumentNullException.ThrowIfNull(folder);
             ArgumentException.ThrowIfNullOrWhiteSpace(accountId);
-
-            if (provider == Providers.None)
-            {
-                throw new ArgumentException("A real cloud provider is required.", nameof(provider));
-            }
 
             if (folder.AssignedClouds.Any(cloud =>
                     cloud.Provider == provider
@@ -499,8 +620,18 @@ namespace StorageStandby.Backend.Core
         }
 
         // TODO:
-        public void DeleteWatchedFolder()
+        public void DeleteWatchedFolder(bool unlinkOnly)
         {
+            // uhh
+            // TODO: figure out constraints later
+            if (unlinkOnly)
+            {
+                
+            }
+            else
+            {
+                
+            }
             // both from storage and from cloud
         }
     }

@@ -117,6 +117,7 @@ namespace StorageStandby.Backend.Services
 
             // add unfinished items
             syncEvent.UnfinishedItems = string.Join(";", queue.Select(i => i.LocalPath));
+            syncEvent.UnfinishedItemIds = string.Join(";", queue.Select(i => i.Id));
 
             // building a Drive Client with currentAccessToken
             using var driveService = BuildDriveClient(
@@ -153,6 +154,8 @@ namespace StorageStandby.Backend.Services
                     succeeded++;
                     syncEvent.SyncedItems = SyncEventPathHelper.AppendPath(syncEvent.SyncedItems, item.LocalPath);
                     syncEvent.UnfinishedItems = SyncEventPathHelper.RemovePath(syncEvent.UnfinishedItems, item.LocalPath);
+                    syncEvent.SyncedItemIds = SyncEventPathHelper.AppendPath(syncEvent.SyncedItemIds, item.Id.ToString());
+                    syncEvent.UnfinishedItemIds = SyncEventPathHelper.RemovePath(syncEvent.UnfinishedItemIds, item.Id.ToString());
                 }
                 catch (OperationCanceledException)
                 {
@@ -194,11 +197,19 @@ namespace StorageStandby.Backend.Services
             PendingSyncItem item,
             CancellationToken cancellationToken)
         {
+            if (!item.Deleted && !item.IsFolder && !File.Exists(item.LocalPath))
+            {
+                item.Deleted = true;
+            }
+
             if (item.Deleted)
             {
                 var remoteItem = await FindByLocalPathAsync(driveService, remoteRootId,
-                    localRootPath, item.OriginalLocalPath ?? item.LocalPath, cancellationToken)
-                    ?? throw new FileNotFoundException("Remote item to delete was not found.", item.LocalPath);
+                    localRootPath, item.OriginalLocalPath ?? item.LocalPath, cancellationToken);
+                if (remoteItem is null)
+                {
+                    return;
+                }
                 await DeleteAsync(driveService, remoteItem, cancellationToken);
                 return;
             }
@@ -574,7 +585,7 @@ namespace StorageStandby.Backend.Services
         public async Task<List<ConnectedAccountDto>> GetConnectedAccounts()
         {
             return await _db.CloudTokens
-                .Where(p => p.ProviderName == Providers.Google)
+                .Where(p => p.Provider == Providers.Google)
                 .Select(account => new ConnectedAccountDto
                 {
                     Id = account.AccountId,

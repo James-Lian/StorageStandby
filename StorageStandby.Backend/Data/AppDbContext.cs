@@ -31,7 +31,15 @@ namespace StorageStandby.Backend.Data
                 .HasData(new SystemSettings { Id = 1 }); // ensure only one row will always be created
             // Configure CloudToken to use composite primary key on (ProviderName, AccountId)
             modelBuilder.Entity<CloudToken>()
-                .HasKey(ct => new { ct.ProviderName, ct.AccountId });
+                .HasKey(ct => new { ct.Provider, ct.AccountId });
+
+            modelBuilder.Entity<SyncEvent>()
+                .OwnsMany(syncEvent => syncEvent.FailedItems, failedItem =>
+                {
+                    failedItem.WithOwner().HasForeignKey("SyncEventId");
+                    failedItem.Property<long>("Id");
+                    failedItem.HasKey("SyncEventId", "Id");
+                });
         }
 
         protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)

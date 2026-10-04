@@ -13,7 +13,7 @@ namespace StorageStandby.Backend.Models
         // DEV: removed --> composite primary key was created instead in AppDbContext in OnModelCreating
 
         // e.g., "GoogleDrive", "OneDrive"
-        public Providers ProviderName { get; set; } = Providers.None;
+        public Providers? Provider { get; set; } = null;
 
         // The token encrypted via Windows DPAPI before being saved
         public string EncryptedRefreshToken { get; set; } = string.Empty;

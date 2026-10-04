@@ -4,7 +4,6 @@ namespace StorageStandby.Backend.Models
 {
     public enum Providers
     {
-        None = -1,
         Google = 0,
         Microsoft = 1,
         Dropbox = 2,
