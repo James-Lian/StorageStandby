@@ -14,6 +14,7 @@ namespace StorageStandby.Backend.Core
     public class BackupEngineState
     {
         private readonly IServiceScopeFactory _scopeFactory;
+        private readonly SemaphoreSlim _syncExecutionLock = new(1, 1);
 
         public BackupEngineState(
             IServiceScopeFactory scopeFactory
@@ -106,6 +107,19 @@ namespace StorageStandby.Backend.Core
             {
                 ActiveWatchedPaths.Add(path);
             }
+        }
+
+        public async Task<IDisposable> AcquireSyncExecutionAsync(CancellationToken cancellationToken)
+        {
+            await _syncExecutionLock.WaitAsync(cancellationToken);
+            return new SyncExecutionLease(_syncExecutionLock);
+        }
+
+        private sealed class SyncExecutionLease : IDisposable
+        {
+            private readonly SemaphoreSlim _semaphore;
+            public SyncExecutionLease(SemaphoreSlim semaphore) => _semaphore = semaphore;
+            public void Dispose() => _semaphore.Release();
         }
 
         private bool IsHeavyProcessRunning()

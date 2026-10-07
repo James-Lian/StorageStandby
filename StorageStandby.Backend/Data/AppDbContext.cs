@@ -16,6 +16,7 @@ namespace StorageStandby.Backend.Data
         public DbSet<SyncEvent> SyncEvents { get; set; }
 
         public DbSet<PendingSyncItem> PendingSyncQueue { get; set; }
+        public DbSet<UntrackedPath> UntrackedPaths { get; set; }
 
         // The constructor passes configuration options (like the file path) to the base EF Core engine
         public AppDbContext(DbContextOptions<AppDbContext> options) : base(options)
@@ -40,6 +41,16 @@ namespace StorageStandby.Backend.Data
                     failedItem.Property<long>("Id");
                     failedItem.HasKey("SyncEventId", "Id");
                 });
+
+            modelBuilder.Entity<UntrackedPath>()
+                .HasIndex(path => new { path.WatchedFolderId, path.LocalPath })
+                .IsUnique();
+
+            modelBuilder.Entity<UntrackedPath>()
+                .HasOne<WatchedFolder>()
+                .WithMany()
+                .HasForeignKey(path => path.WatchedFolderId)
+                .OnDelete(DeleteBehavior.Cascade);
         }
 
         protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)

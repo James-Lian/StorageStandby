@@ -165,6 +165,39 @@ namespace StorageStandby.Backend.Migrations
                         });
                 });
 
+            modelBuilder.Entity("StorageStandby.Backend.Models.UntrackedPath", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("FirstSeen")
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("IsFolder")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("LastSeen")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("LocalPath")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long>("WatchedFolderId")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("WatchedFolderId", "LocalPath")
+                        .IsUnique();
+
+                    b.ToTable("UntrackedPaths");
+                });
+
             modelBuilder.Entity("StorageStandby.Backend.Models.WatchedFolder", b =>
                 {
                     b.Property<long>("Id")
@@ -270,6 +303,15 @@ namespace StorageStandby.Backend.Migrations
                         });
 
                     b.Navigation("FailedItems");
+                });
+
+            modelBuilder.Entity("StorageStandby.Backend.Models.UntrackedPath", b =>
+                {
+                    b.HasOne("StorageStandby.Backend.Models.WatchedFolder", null)
+                        .WithMany()
+                        .HasForeignKey("WatchedFolderId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
                 });
 
             modelBuilder.Entity("StorageStandby.Backend.Models.WatchedFolderCloudMetadata", b =>

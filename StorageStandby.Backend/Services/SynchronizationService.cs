@@ -11,22 +11,31 @@ namespace StorageStandby.Backend.Core
         readonly WatchedFolderService _watchedFolderService;
         readonly LocalFileSystemService _fileSystem;
         readonly TokenManager _tokenManager;
+        readonly BackupEngineState _state;
         public SynchronizationService(
             IServiceScopeFactory scopeFactory,
             WatchedFolderService watchedFolderService,
             LocalFileSystemService fileSystem,
-            TokenManager tokenManager)
+            TokenManager tokenManager,
+            BackupEngineState state)
         {
             _scopeFactory = scopeFactory;
             _watchedFolderService = watchedFolderService;
             _fileSystem = fileSystem;
             _tokenManager = tokenManager;
+            _state = state;
         }
 
         // ----------------------------------------------------------------------------------------------------
         // Sync & Queue Methods
 
         public async Task ExecuteSyncQueue(CancellationToken cancellationToken = default)
+        {
+            using var executionLease = await _state.AcquireSyncExecutionAsync(cancellationToken);
+            await ExecuteSyncQueueCore(cancellationToken);
+        }
+
+        private async Task ExecuteSyncQueueCore(CancellationToken cancellationToken)
         {
             // 1. Build list of altered WatchedFolders
 
@@ -118,6 +127,10 @@ namespace StorageStandby.Backend.Core
 
                     try
                     {
+                        await EnsureDestinationHasCapacityAsync(
+                            destination,
+                            destinationQueue,
+                            cancellationToken);
                         await ReconcileRemoteFolderAsync(
                             db,
                             watchedFolder,
@@ -392,6 +405,50 @@ namespace StorageStandby.Backend.Core
                 cancellationToken);
         }
 
+        private async Task EnsureDestinationHasCapacityAsync(
+            ProviderAccountCloud destination,
+            IReadOnlyList<PendingSyncItem> queue,
+            CancellationToken cancellationToken)
+        {
+            long requiredBytes = 0;
+            foreach (var item in queue.Where(item => !item.Deleted && !item.IsFolder))
+            {
+                if (!File.Exists(item.LocalPath))
+                {
+                    continue;
+                }
+
+                requiredBytes = checked(requiredBytes + new FileInfo(item.LocalPath).Length);
+            }
+            if (requiredBytes == 0)
+            {
+                return;
+            }
+
+            await using var scope = _scopeFactory.CreateAsyncScope();
+            StorageQuotaDto quota = destination.Provider switch
+            {
+                Providers.Google => await scope.ServiceProvider
+                    .GetRequiredService<GoogleDriveProvider>()
+                    .GetRemainingStorageQuotaAsync(destination.AccountId, cancellationToken),
+                Providers.Microsoft => await scope.ServiceProvider
+                    .GetRequiredService<OneDriveProvider>()
+                    .GetRemainingStorageQuotaAsync(destination.AccountId, cancellationToken),
+                Providers.Dropbox => await scope.ServiceProvider
+                    .GetRequiredService<DropboxProvider>()
+                    .GetRemainingStorageQuotaAsync(destination.AccountId, cancellationToken),
+                _ => throw new NotSupportedException(
+                    $"Storage quota is not implemented for {destination.Provider}.")
+            };
+
+            if (quota.RemainingBytes < (ulong)requiredBytes)
+            {
+                throw new IOException(
+                    $"Cloud {destination.Provider}/{destination.AccountId} has insufficient storage. "
+                    + $"Required {requiredBytes} bytes, remaining {quota.RemainingBytes} bytes.");
+            }
+        }
+
         public async Task<List<ProviderAccountCloud>> DetermineSyncDestinations(
             WatchedFolder folder,
             CancellationToken cancellationToken = default)
@@ -427,7 +484,13 @@ namespace StorageStandby.Backend.Core
             string root = string.IsNullOrWhiteSpace(localPath)
                 ? folder.LocalPath
                 : Path.GetFullPath(localPath);
-            if (!root.StartsWith(folder.LocalPath, StringComparison.OrdinalIgnoreCase))
+            string watchedRoot = folder.LocalPath.TrimEnd(
+                Path.DirectorySeparatorChar,
+                Path.AltDirectorySeparatorChar);
+            if (!string.Equals(root, watchedRoot, StringComparison.OrdinalIgnoreCase)
+                && !root.StartsWith(
+                    watchedRoot + Path.DirectorySeparatorChar,
+                    StringComparison.OrdinalIgnoreCase))
             {
                 throw new ArgumentException("The resync path must be inside the watched folder.", nameof(localPath));
             }
@@ -479,6 +542,89 @@ namespace StorageStandby.Backend.Core
             }
 
             await db.SaveChangesAsync(cancellationToken);
+        }
+
+        public async Task<List<UntrackedPath>> ReconcileUntrackedPathsAsync(
+            long watchedFolderId,
+            CancellationToken cancellationToken = default)
+        {
+            await using var scope = _scopeFactory.CreateAsyncScope();
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var folder = await db.WatchedFolders
+                .SingleOrDefaultAsync(item => item.Id == watchedFolderId, cancellationToken)
+                ?? throw new InvalidOperationException($"Watched folder does not exist: {watchedFolderId}");
+            if (string.IsNullOrWhiteSpace(folder.LocalPath) || !Directory.Exists(folder.LocalPath))
+            {
+                throw new DirectoryNotFoundException(folder.LocalPath);
+            }
+
+            var paths = Directory.EnumerateDirectories(folder.LocalPath, "*", SearchOption.AllDirectories)
+                .Select(path => (Path: path, IsFolder: true))
+                .Concat(Directory.EnumerateFiles(folder.LocalPath, "*", SearchOption.AllDirectories)
+                    .Select(path => (Path: path, IsFolder: false)))
+                .Where(item => !_fileSystem.IsFileIgnored(folder.IgnoreRules, item.Path))
+                .Where(item => !_watchedFolderService.IsPathOwnedByAnotherWatchedFolder(
+                    watchedFolderId,
+                    item.Path))
+                .ToList();
+            var currentPaths = paths.Select(item => item.Path).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var queuedPaths = await db.PendingSyncQueue
+                .Where(item => item.WatchedFolderId == watchedFolderId && !item.IsTerminal())
+                .Select(item => item.LocalPath)
+                .ToListAsync(cancellationToken);
+            var queued = queuedPaths.ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var records = await db.UntrackedPaths
+                .Where(item => item.WatchedFolderId == watchedFolderId)
+                .ToListAsync(cancellationToken);
+            var byPath = records.ToDictionary(item => item.LocalPath, StringComparer.OrdinalIgnoreCase);
+            DateTime now = DateTime.UtcNow;
+
+            foreach (var (path, isFolder) in paths)
+            {
+                if (queued.Contains(path))
+                {
+                    if (byPath.TryGetValue(path, out var queuedRecord))
+                    {
+                        queuedRecord.Status = UntrackedPathStatus.Resolved;
+                        queuedRecord.LastSeen = now;
+                    }
+                    continue;
+                }
+
+                if (byPath.TryGetValue(path, out var record))
+                {
+                    record.IsFolder = isFolder;
+                    record.LastSeen = now;
+                    record.Status = UntrackedPathStatus.Untracked;
+                }
+                else
+                {
+                    db.UntrackedPaths.Add(new UntrackedPath
+                    {
+                        WatchedFolderId = watchedFolderId,
+                        LocalPath = path,
+                        IsFolder = isFolder,
+                        FirstSeen = now,
+                        LastSeen = now,
+                        Status = UntrackedPathStatus.Untracked
+                    });
+                }
+            }
+
+            foreach (var record in records.Where(record =>
+                !currentPaths.Contains(record.LocalPath)
+                && record.Status == UntrackedPathStatus.Untracked))
+            {
+                record.Status = UntrackedPathStatus.Resolved;
+                record.LastSeen = now;
+            }
+
+            await db.SaveChangesAsync(cancellationToken);
+            return await db.UntrackedPaths
+                .Where(item => item.WatchedFolderId == watchedFolderId
+                    && item.Status == UntrackedPathStatus.Untracked)
+                .OrderBy(item => item.LocalPath)
+                .ToListAsync(cancellationToken);
         }
 
         public async Task<TimeSpan?> GetAutomaticSyncIntervalAsync(
@@ -589,7 +735,7 @@ namespace StorageStandby.Backend.Core
                 Provider = provider,
                 AccountId = accountId,
                 WatchedFolderId = persistedFolder.Id,
-                RemoteFolderId = string.Empty, // TODO: <-- Wrong: RemoteFolderId should not be string.Empty
+                RemoteFolderId = string.Empty,
                 ConfigFileId = string.Empty
             };
 
@@ -603,36 +749,8 @@ namespace StorageStandby.Backend.Core
                 RemoteFolderId = cloudMetadata.RemoteFolderId,
                 ConfigFileId = cloudMetadata.ConfigFileId,
                 WatchedFolderId = folder.Id,
+                State = cloudMetadata.State,
             });
-        }
-
-        // Implement in the future: manual selection of files/directories to be re-synced
-
-        // Implement in the future: reconcile untracked changes (e.g. a renamed file that is not tracked, the old path no longer exists, while the new path seemingly was "uncreated")
-        // Note: MIGHT NOT consider untracked "changed files", just changes to the directory tree
-
-        // Implement in the future: for user-controlled staging/unstaging changes
-        // 1. see which queue actions have previous dependencies - allow for user to stage certain changes
-        // 2. remove useless dependencies that don't change anything
-        public void QueueDependencyChecker()
-        {
-            throw new NotImplementedException();
-        }
-
-        // TODO:
-        public void DeleteWatchedFolder(bool unlinkOnly)
-        {
-            // uhh
-            // TODO: figure out constraints later
-            if (unlinkOnly)
-            {
-                
-            }
-            else
-            {
-                
-            }
-            // both from storage and from cloud
         }
     }
 }

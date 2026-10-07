@@ -96,6 +96,10 @@ namespace StorageStandby.Backend.Migrations
                 nullable: false,
                 defaultValue: 0);
 
+            migrationBuilder.Sql(
+                "UPDATE WatchedFolderCloudMetadata SET State = 2 "
+                + "WHERE RemoteFolderId IS NOT NULL AND RemoteFolderId <> '';" );
+
             migrationBuilder.AddColumn<bool>(
                 name: "StoreZip",
                 table: "WatchedFolderCloudMetadata",

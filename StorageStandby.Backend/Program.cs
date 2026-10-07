@@ -280,6 +280,17 @@ app.MapPost("/api/folders/{watchedFolderId:long}/resync", async (
     return Results.Ok(new { Message = "Resync queued." });
 });
 
+app.MapPost("/api/folders/{watchedFolderId:long}/reconcile", async (
+    long watchedFolderId,
+    SynchronizationService synchronizationService,
+    CancellationToken cancellationToken) =>
+{
+    var paths = await synchronizationService.ReconcileUntrackedPathsAsync(
+        watchedFolderId,
+        cancellationToken);
+    return Results.Ok(paths);
+});
+
 app.MapPost("/api/folders/{watchedFolderId:long}/clouds", async (
     long watchedFolderId,
     ProviderAccountCloud request,
