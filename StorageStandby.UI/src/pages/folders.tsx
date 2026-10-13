@@ -1,5 +1,5 @@
-import { ArrowDownUp, Ellipsis, ArrowUp, ChevronDown, Folder, FolderPlus, Grid, List, Plus, Trash2, Upload, ArrowDown, CircleCheck, CircleDashed, CircleX } from "lucide-react"
-import { useMemo, useState } from "react"
+import { ArrowDownUp, Ellipsis, ArrowUp, ArrowDown, Grid, List, Plus, Trash2, Upload, CircleCheck, CircleX } from "lucide-react"
+import { useEffect, useMemo, useState } from "react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { ButtonGroup } from "@/components/ui/button-group"
@@ -14,7 +14,6 @@ import { Input } from "@/components/ui/input"
 import {
 	Table,
 	TableBody,
-	TableCaption,
 	TableCell,
 	TableFooter,
 	TableHead,
@@ -31,92 +30,39 @@ import {
 	SelectTrigger,
 	SelectValue,
 } from "@/components/ui/select"
-import type { FolderSyncStatus } from "@/types/folders"
+import { PROBLEMATIC_FOLDER_TYPE } from "@/types/folders"
+import type { WatchedFolder } from "@/types/data"
+import { refreshWatchedFolders, useWatchedFolders } from "@/lib/watched-folders"
 
 
 // TODO: setIsIgnoreRulesOpen(true)
-interface FolderDisplayInfo {
-	id: string,
-	name: string,
-	path: string,
-	syncStatus: string,
-	lastSynced: string,
-	size: string,
-	files: number,
-	tag: string,
-	folders: number,
+const getFolderName = (folder: WatchedFolder) =>
+	folder.localPath?.split(/[\\/]/).filter(Boolean).pop() ?? "Unnamed folder"
+
+const getProblemLabel = (problem: number) => {
+	switch (problem) {
+		case PROBLEMATIC_FOLDER_TYPE.None:
+			return "Healthy"
+		case PROBLEMATIC_FOLDER_TYPE.PathNotFound:
+			return "Path not found"
+		case PROBLEMATIC_FOLDER_TYPE.TooLarge:
+			return "Too large"
+		case PROBLEMATIC_FOLDER_TYPE.TooManyFiles:
+			return "Too many files"
+		case PROBLEMATIC_FOLDER_TYPE.NestedWatchedFolder:
+			return "Nested folder"
+		default:
+			return "Issue"
+	}
 }
 
-const initialFolders: FolderDisplayInfo[] = [
-	{
-		id: "folder-1",
-		name: "Project backups",
-		syncStatus: "Synced",
-		lastSynced: "2026-07-02",
-		size: "12.1 GB",
-		files: 48,
-		folders: 4,
-		tag: "Stable",
-		path: "C:/Users/james/temp"
-	},
-	{
-		id: "folder-2",
-		name: "Work documents",
-		syncStatus: "Pending",
-		lastSynced: "2026-07-01",
-		size: "4.9 GB",
-		files: 12,
-		folders: 2,
-		tag: "Priority",
-		path: "C:/Users/james/temp"
-	},
-	{
-		id: "folder-3",
-		name: "Photos archive",
-		syncStatus: "Error",
-		lastSynced: "2026-06-30",
-		size: "23.7 GB",
-		files: 324,
-		folders: 16,
-		tag: "Media",
-		path: "C:/Users/james/temp"
-	},
-]
+const getFolderStatus = (folder: WatchedFolder) =>
+	folder.problem === PROBLEMATIC_FOLDER_TYPE.None
+		? folder.lastSync ? "Synced" : "Pending"
+		: "Issue"
 
-const folderContents = [
-	{
-		id: "item-1",
-		name: "Design specs.pdf",
-		type: "File",
-		size: "1.2 MB",
-		status: "Synced",
-		icon: "file",
-	},
-	{
-		id: "item-2",
-		name: "Assets",
-		type: "Folder",
-		size: "10.4 GB",
-		status: "Pending",
-		icon: "folder",
-	},
-	{
-		id: "item-3",
-		name: "Meeting notes.docx",
-		type: "File",
-		size: "220 KB",
-		status: "Synced",
-		icon: "file",
-	},
-	{
-		id: "item-4",
-		name: "Screenshots",
-		type: "Folder",
-		size: "3.6 GB",
-		status: "Error",
-		icon: "folder",
-	},
-]
+const formatDate = (value: string | null) =>
+	value ? new Date(value).toLocaleString() : "Never"
 
 // TODO: file timeline/time travel previews
 // one-click, creates a version control
@@ -124,31 +70,42 @@ const folderContents = [
 // stored locations column: (local, Google Drive, OneCloud (pending), etc.)
 
 export function Folders() {
+	const { folders, isLoading, error } = useWatchedFolders()
 	const [mode, setMode] = useState<"list" | "grid">("list")
 	const [search, setSearch] = useState("")
 	
-	// placeholder code, remove later
-	const [selectedFolder, setSelectedFolder] = useState(initialFolders[0])
-	const [selectedRows, setSelectedRows] = useState<Array<string>>([])
+	const [selectedFolder, setSelectedFolder] = useState<WatchedFolder | null>(null)
+	const [selectedRows, setSelectedRows] = useState<Array<number>>([])
 	const [sortMethod, setSortMethod] = useState<string>("path");
 
-    const appendToSelectedRows = (elem: string) => {
+	useEffect(() => {
+		void refreshWatchedFolders()
+	}, [])
+
+    const appendToSelectedRows = (elem: number) => {
         setSelectedRows((selectedRows) => [...selectedRows, elem])
     }
-    const removeFromSelectedRows = (elem: string) => {
+    const removeFromSelectedRows = (elem: number) => {
         setSelectedRows((selectedRows) => selectedRows.filter((item) => item !== elem))
     }
 
 	const filteredFolders = useMemo(() => {
-		if (!search) return initialFolders
-		return initialFolders.filter((folder) =>
-			folder.name.toLowerCase().includes(search.toLowerCase())
+		const normalizedSearch = search.toLowerCase()
+		return folders.filter((folder) =>
+			getFolderName(folder).toLowerCase().includes(normalizedSearch) ||
+			folder.localPath?.toLowerCase().includes(normalizedSearch)
 		)
-	}, [search]);
+	}, [folders, search]);
 
-	const totalFiles = filteredFolders.reduce((acc, item) => acc + item.files, 0);
+	const totalFiles = "Not provided by API";
 
-	const tagOptions = ["Stable", "Priority", "Media"];
+	const tagOptions = ["Healthy", "Path not found", "Too large", "Too many files", "Issue"];
+
+	// ---------------------------
+	// Adding Folders
+	const handleAddFolder = () => {
+		
+	};
 
 	return (
 		<div className="space-y-6 p-4">
@@ -193,16 +150,22 @@ export function Folders() {
 					<p className="text-xl font-semibold">{filteredFolders.length}</p>
 				</div>
 				<div className="rounded-2xl border border-border bg-background p-4">
-					<p className="text-sm text-muted-foreground">Files</p>
+					<p className="text-sm text-muted-foreground">File count</p>
 					<p className="text-xl font-semibold">{totalFiles}</p>
 				</div>
 			</div>
 
 			<div className="space-y-6">
+				{isLoading && (
+					<p className="text-sm text-muted-foreground">Loading watched folders...</p>
+				)}
+				{error && (
+					<p className="text-sm text-destructive">Unable to load watched folders: {error.message}</p>
+				)}
 				<div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
 					<div>
 						<h2 className="text-lg font-semibold">Top-level folders</h2>
-						<p className="text-sm text-muted-foreground">{filteredFolders.length} folders, {totalFiles} files across current filter.</p>
+						<p className="text-sm text-muted-foreground">{filteredFolders.length} folders across current filter. File counts are not included in the folder API response.</p>
 					</div>
 					<div className="flex flex-row gap-3 items-center">
 						<Select value={sortMethod} onValueChange={setSortMethod}>
@@ -252,12 +215,19 @@ export function Folders() {
 								<TableHead>Name</TableHead>
 								<TableHead>Sync status</TableHead>
 								<TableHead>Last synced</TableHead>
-								<TableHead>Size</TableHead>
-								<TableHead>Labels</TableHead>
+								<TableHead>Clouds</TableHead>
+								<TableHead>Problem</TableHead>
 								<TableHead className="text-right"></TableHead>
 							</TableRow>
 						</TableHeader>
 						<TableBody>
+							{filteredFolders.length == 0 && 
+								<TableRow>
+									<TableCell colSpan={7} className="text-center py-6">
+										<p className="text-sm text-muted-foreground">No folders added.</p>
+									</TableCell>
+								</TableRow>
+							}
 							{filteredFolders.map((folder) => (
 								<TableRow key={folder.id} className={selectedRows.includes(folder.id) ? "bg-muted" : ""}>
 									<TableCell>
@@ -278,41 +248,40 @@ export function Folders() {
 										<div className="inline-flex w-fit h-fit items-center gap-1">
 											<Tooltip>
 												<TooltipTrigger asChild>
-													<Button variant="link" className="cursor-pointer">
-														{folder.name}
+													<Button variant="link" className="cursor-pointer" onClick={() => {
+														setSelectedFolder(folder)
+														setMode("grid")
+													}}>
+														{getFolderName(folder)}
 													</Button>
 												</TooltipTrigger>
 												<TooltipContent>
-													{folder.path}
+													{folder.localPath ?? "No local path"}
 												</TooltipContent>
 											</Tooltip>
 											<Tooltip>
 												<TooltipTrigger asChild>
-													<CircleCheck className="size-4"></CircleCheck>
-													{/* <CircleDashed></CircleDashed>
-													<Button variant={"destructive"}>
-														<CircleX></CircleX>
-													</Button> */}
+													{folder.problem === 0
+														? <CircleCheck className="size-4" />
+														: <CircleX className="size-4 text-destructive" />}
 												</TooltipTrigger>
 												<TooltipContent>
-													All items up to date.
-													<br/>
-													Last modified: 2026/12/23
+													{getProblemLabel(folder.problem)}
 												</TooltipContent>
 											</Tooltip>
 										</div>
 									</TableCell>
 									<TableCell>
-										<Badge variant={folder.syncStatus === "Synced" ? "default" : folder.syncStatus === "Pending" ? "secondary" : "destructive"}>
-											{folder.syncStatus}
+										<Badge variant={getFolderStatus(folder) === "Synced" ? "default" : getFolderStatus(folder) === "Pending" ? "secondary" : "destructive"}>
+											{getFolderStatus(folder)}
 										</Badge>
 									</TableCell>
 									<TableCell>
-										{folder.lastSynced}
+										{formatDate(folder.lastSync)}
 									</TableCell>
-									<TableCell>{folder.size}</TableCell>
+									<TableCell>{folder.assignedClouds.length}</TableCell>
 									<TableCell>
-										<Badge variant="outline">{folder.tag}</Badge>
+										<Badge variant="outline">{getProblemLabel(folder.problem)}</Badge>
 									</TableCell>
 									<TableCell className="text-right">
 										<DropdownMenu>
@@ -338,8 +307,12 @@ export function Folders() {
 								<TableCell colSpan={7}>
 									<div className="flex flex-col gap-4 py-2 md:flex-row md:items-center md:justify-between">
 										<div className="flex flex-wrap items-center gap-2">
-											<Button variant="default" size="sm">
-												<Plus className="size-4" /> Add folders
+											<Button 
+												variant="default" 
+												size="sm"
+												onClick={handleAddFolder}
+											>
+												<Plus className="size-4" /> Add folder
 											</Button>
 											<ButtonGroup>
 												<Button variant="outline" size="sm">
@@ -373,49 +346,23 @@ export function Folders() {
 								<div className="mb-4 flex items-center justify-between gap-4">
 									<div>
 										<p className="text-sm text-muted-foreground">Contents of</p>
-										<h3 className="text-lg font-semibold">{selectedFolder.name}</h3>
+										<h3 className="text-lg font-semibold">{getFolderName(selectedFolder)}</h3>
 									</div>
-									<Badge variant={selectedFolder.syncStatus === "Synced" ? "default" : selectedFolder.syncStatus === "Pending" ? "secondary" : "destructive"}>
-										{selectedFolder.syncStatus}
+									<Badge variant={getFolderStatus(selectedFolder) === "Synced" ? "default" : getFolderStatus(selectedFolder) === "Pending" ? "secondary" : "destructive"}>
+										{getFolderStatus(selectedFolder)}
 									</Badge>
 								</div>
 								<div className="grid gap-3">
-									{folderContents.map((item) => (
-										<div key={item.id} className="rounded-2xl border border-border bg-muted/50 p-4">
-											<div className="mb-3 flex items-center justify-between gap-2">
-												<div className="flex items-center gap-3">
-													<div className="inline-flex h-10 w-10 items-center justify-center rounded-2xl bg-background text-primary">
-														{item.icon === "folder" ? <Folder className="size-5" /> : <FolderPlus className="size-5" />}
-													</div>
-													<div>
-														<p className="font-semibold">{item.name}</p>
-														<p className="text-xs text-muted-foreground">{item.type}</p>
-													</div>
-												</div>
-												<Badge variant={item.status === "Synced" ? "default" : item.status === "Pending" ? "secondary" : "destructive"}>
-													{item.status}
-												</Badge>
-											</div>
-											<div className="flex items-center justify-between text-sm text-muted-foreground">
-												<span>{item.size}</span>
-												<DropdownMenu>
-													<DropdownMenuTrigger asChild>
-														<Button variant="outline" size="sm">
-															Actions <ChevronDown className="size-4" />
-														</Button>
-													</DropdownMenuTrigger>
-													<DropdownMenuPortal>
-														<DropdownMenuContent>
-															<DropdownMenuItem>Open</DropdownMenuItem>
-															<DropdownMenuItem>Move</DropdownMenuItem>
-															<DropdownMenuItem>Reupload Now</DropdownMenuItem>
-															<DropdownMenuItem variant="destructive">Remove</DropdownMenuItem>
-														</DropdownMenuContent>
-													</DropdownMenuPortal>
-												</DropdownMenu>
-											</div>
+									<div className="rounded-2xl border border-border bg-muted/50 p-4">
+										<p className="text-sm text-muted-foreground">Local path</p>
+										<p className="font-mono text-sm">{selectedFolder.localPath ?? "No local path"}</p>
+										<p className="mt-3 text-sm text-muted-foreground">Cloud assignments</p>
+										<p>{selectedFolder.assignedClouds.length}</p>
+										<p className="mt-3 text-sm text-muted-foreground">Ignore rules</p>
+										<p>{selectedFolder.ignoreRules || "None"}</p>
+										<p className="mt-3 text-sm text-muted-foreground">Last synced</p>
+										<p>{formatDate(selectedFolder.lastSync)}</p>
 										</div>
-									))}
 								</div>
 							</div>
 						) : (

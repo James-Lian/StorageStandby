@@ -76,6 +76,18 @@ export const dismissNotification = (id: string, reason: NotificationDismissReaso
     }))
 }
 
+export const dismissAllNotifications = (reason: NotificationDismissReason = "programmatic") => {
+    setSnapshot((current) => ({
+        notifications: current.notifications.map((entry) => {
+            return {
+                ...entry,
+                dismissedAt: Date.now(),
+                dismissReason: reason,
+            }
+        })
+    }))
+}
+
 export const clearNotification = (id: string) => {
     setSnapshot((current) => ({
         notifications: current.notifications.filter((entry) => entry.id !== id),

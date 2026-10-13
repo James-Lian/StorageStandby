@@ -1,6 +1,6 @@
 export type WatchedFolder = {
     id: number
-    localPath: string
+    localPath: string | null
     assignedClouds: WatchedFolderCloudMetadata[]
     userAssignedClouds: ProviderAccountCloud[]
     ignoreRules: string
