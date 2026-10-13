@@ -247,7 +247,6 @@ export function Folders() {
 										className="border-black"
 									/>
 								</TableHead>
-								<TableHead>Status</TableHead>
 								<TableHead>Name</TableHead>
 								<TableHead>Sync status</TableHead>
 								<TableHead>Last synced</TableHead>
@@ -259,22 +258,6 @@ export function Folders() {
 						<TableBody>
 							{filteredFolders.map((folder) => (
 								<TableRow key={folder.id} className={selectedRows.includes(folder.id) ? "bg-muted" : ""}>
-									<TableCell>
-										<Tooltip>
-											<TooltipTrigger asChild>
-												<CircleCheck></CircleCheck>
-												{/* <CircleDashed></CircleDashed>
-												<Button variant={"destructive"}>
-													<CircleX></CircleX>
-												</Button> */}
-											</TooltipTrigger>
-											<TooltipContent>
-												All items up to date.
-												<br/>
-												Last modified: 2026/12/23
-											</TooltipContent>
-										</Tooltip>
-									</TableCell>
 									<TableCell>
 										<Checkbox 
 											checked={selectedRows.includes(folder.id)} 
@@ -290,16 +273,32 @@ export function Folders() {
 										/>
 									</TableCell>
 									<TableCell>
-										<Tooltip>
-											<TooltipTrigger asChild>
-												<Button variant="link" className="cursor-pointer">
-													{folder.name}
-												</Button>
-											</TooltipTrigger>
-											<TooltipContent>
-												{folder.path}
-											</TooltipContent>
-										</Tooltip>
+										<div className="inline-flex w-fit h-fit items-center gap-1">
+											<Tooltip>
+												<TooltipTrigger asChild>
+													<Button variant="link" className="cursor-pointer">
+														{folder.name}
+													</Button>
+												</TooltipTrigger>
+												<TooltipContent>
+													{folder.path}
+												</TooltipContent>
+											</Tooltip>
+											<Tooltip>
+												<TooltipTrigger asChild>
+													<CircleCheck className="size-4"></CircleCheck>
+													{/* <CircleDashed></CircleDashed>
+													<Button variant={"destructive"}>
+														<CircleX></CircleX>
+													</Button> */}
+												</TooltipTrigger>
+												<TooltipContent>
+													All items up to date.
+													<br/>
+													Last modified: 2026/12/23
+												</TooltipContent>
+											</Tooltip>
+										</div>
 									</TableCell>
 									<TableCell>
 										<Badge variant={folder.syncStatus === "Synced" ? "default" : folder.syncStatus === "Pending" ? "secondary" : "destructive"}>
