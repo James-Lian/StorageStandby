@@ -31,8 +31,21 @@ import {
 	SelectTrigger,
 	SelectValue,
 } from "@/components/ui/select"
+import type { FolderSyncStatus } from "@/types/folders"
 
-const initialFolders = [
+interface FolderDisplayInfo {
+	id: string,
+	name: string,
+	path: string,
+	syncStatus: string,
+	lastSynced: string,
+	size: string,
+	files: number,
+	tag: string,
+	folders: number,
+}
+
+const initialFolders: FolderDisplayInfo[] = [
 	{
 		id: "folder-1",
 		name: "Project backups",
@@ -250,10 +263,10 @@ export function Folders() {
 										<Tooltip>
 											<TooltipTrigger asChild>
 												<CircleCheck></CircleCheck>
-												<CircleDashed></CircleDashed>
+												{/* <CircleDashed></CircleDashed>
 												<Button variant={"destructive"}>
 													<CircleX></CircleX>
-												</Button>
+												</Button> */}
 											</TooltipTrigger>
 											<TooltipContent>
 												All items up to date.

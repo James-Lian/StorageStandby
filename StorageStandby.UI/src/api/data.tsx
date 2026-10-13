@@ -1,14 +1,14 @@
-import { PROVIDER_METADATA, type Providers } from "@/types/providers";
 import { logError } from "@/lib/notifications";
 import { logApiProblemDetailsError, readErrorDetails } from "@/lib/read-errors-utils";
 import { ErrorHandlingWrapper } from "./errorhandling";
+import type { SyncEvent, SystemSettings, WatchedFolder } from "@/types/data";
 
 // ---------------------------------------------------------------------------
 // WATCHED FOLDERS
 // ---------------------------------------------------------------------------
 
-export async function fetchAllWatchedFolders(fName: string = "fetchAllWatchedFolders") {
-    ErrorHandlingWrapper(fName, async () => {
+export async function fetchAllWatchedFolders(fName: string = "fetchAllWatchedFolders"): Promise<WatchedFolder[]> {
+    return ErrorHandlingWrapper(fName, async () => {
         const response = await fetch(`http://storagestandby.local/api/folders`);
 
         if (!response.ok) {
@@ -27,8 +27,8 @@ export async function fetchAllWatchedFolders(fName: string = "fetchAllWatchedFol
     })
 }
 
-export async function fetchWatchedFolder(localPath: string, fName: string = "fetchWatchedFolder") {
-    ErrorHandlingWrapper(fName, async () => {
+export async function fetchWatchedFolder(localPath: string, fName: string = "fetchWatchedFolder"): Promise<WatchedFolder> {
+    return ErrorHandlingWrapper(fName, async () => {
         const response = await fetch(`http://storagestandby.local/api/folders/${localPath}`);
 
         if (!response.ok) {
@@ -122,4 +122,28 @@ export async function fetchGlobalIgnoreRules() {
 
 export async function editGlocalIgnoreRules() {
 
+}
+
+export async function fetchSystemSettings(fName: string = "fetchSystemSettings"): Promise<SystemSettings> {
+    return ErrorHandlingWrapper(fName, async () => {
+        const response = await fetch(`http://storagestandby.local/api/settings`);
+        if (!response.ok) {
+            const details = await readErrorDetails(response);
+            logApiProblemDetailsError({ fallbackTitle: `${fName}: Response invalid`, details });
+            throw new Error(`${fName}: Failed to fetch system settings`);
+        }
+        return await response.json() as SystemSettings;
+    });
+}
+
+export async function fetchSyncEvents(fName: string = "fetchSyncEvents"): Promise<SyncEvent[]> {
+    return ErrorHandlingWrapper(fName, async () => {
+        const response = await fetch(`http://storagestandby.local/api/syncevents`);
+        if (!response.ok) {
+            const details = await readErrorDetails(response);
+            logApiProblemDetailsError({ fallbackTitle: `${fName}: Response invalid`, details });
+            throw new Error(`${fName}: Failed to fetch sync events`);
+        }
+        return await response.json() as SyncEvent[];
+    });
 }
