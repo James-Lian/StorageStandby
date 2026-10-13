@@ -117,55 +117,6 @@ export function Sync() {
                 </div>
             </div>
 
-            {/* Status & Global Rules Section */}
-            <div className="grid gap-4 md:grid-cols-2">
-                {/* Global Provider Settings */}
-                <div className="rounded-2xl border border-border bg-background p-4 space-y-3">
-                    <div>
-                        <h2 className="text-lg font-semibold">Global Preferred Provider</h2>
-                        <p className="text-sm text-muted-foreground">
-                            Default destination for new backup targets unless explicitly overridden.
-                        </p>
-                    </div>
-                    <Select value={preferredProvider} onValueChange={setPreferredProvider}>
-                        <SelectTrigger>
-                            <SelectValue placeholder="Select Provider" />
-                        </SelectTrigger>
-                        <SelectContent>
-                            <SelectItem value="none">None (auto storage-optimization)</SelectItem>
-                            <SelectItem value="google">Google Drive</SelectItem>
-                            <SelectItem value="microsoft">OneDrive</SelectItem>
-                            <SelectItem value="dropbox">Dropbox</SelectItem>
-                        </SelectContent>
-                    </Select>
-                </div>
-
-                {/* Global Ignore Rules */}
-                <div className="rounded-2xl border border-border bg-background p-4 space-y-3">
-                    <div>
-                        <h2 className="text-lg font-semibold">Global Ignore Rules</h2>
-                        <p className="text-sm text-muted-foreground">
-                            Semicolon-delimited patterns skipped across all watched directories.
-                        </p>
-                    </div>
-                    <div className="flex flex-row">
-                        <div className="flex-1 overflow-x-auto">
-                            <Input 
-                                value={ignoreRules} 
-                                readOnly 
-                                placeholder="Your ignore rules appear here (semicolon-delimited)." 
-                            />
-                        </div>
-                        <Button 
-                            className="ml-2"
-                            onClick={() => setIsIgnoreRulesDialogOpen(true)}
-                        >
-                                Edit
-                        </Button>
-                    </div>
-                </div>
-            </div>
-
             {/* Active & Queue Section */}
             <div className="rounded-2xl border border-border bg-background p-4 space-y-4">
                 <div className="flex items-center justify-between">
