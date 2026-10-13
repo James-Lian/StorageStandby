@@ -33,6 +33,8 @@ import {
 } from "@/components/ui/select"
 import type { FolderSyncStatus } from "@/types/folders"
 
+
+// TODO: setIsIgnoreRulesOpen(true)
 interface FolderDisplayInfo {
 	id: string,
 	name: string,
