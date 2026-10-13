@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
 import type { AppNotification, NotificationDismissReason } from "@/lib/notification-center"
 import { stringifyDetails } from "@/lib/notification-utils"
+import { dismissAllNotifications } from "@/lib/notification-center"
 
 function useHoverPauseDismissTimer({
     durationMs,
@@ -131,10 +132,21 @@ export function NotificationToastContent({
                         style={{ width: `${Math.max(0, (remainingMs / durationMs) * 100)}%` }}
                     />
                 </div>
-                <div className="flex items-center justify-end">
+                <div className="flex items-center justify-between">
                     {/* <p className="text-[11px] text-muted-foreground">
                         {isPaused ? "Auto-dismiss paused" : `Auto-dismiss in ${Math.ceil(remainingMs / 1000)}s`}
                     </p> */}
+                    <Button
+                        className=""
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => {
+                            dismissAllNotifications("manual")
+                            toast.dismiss()
+                        }}
+                    >
+                        Dismiss all
+                    </Button>
                     <Button
                         className=""
                         variant="ghost"
