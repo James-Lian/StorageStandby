@@ -54,60 +54,66 @@ export function Sync() {
                 </Badge>
             </div>
 
-            {/* Engine Control Bar */}
+            {/* Automatic Sync Control Bar */}
             <div
                 className={cn(
                     "flex flex-col gap-4 rounded-2xl border p-4 md:flex-row md:items-center md:justify-between",
-                    isPaused ? "border-amber-500/40 bg-amber-500/10" : "border-emerald-500/40 bg-emerald-500/10"
+                    isPaused
+                        ? "border-rose-500/40 bg-rose-500/10"
+                        : "border-sky-500/40 bg-gradient-to-r from-sky-500/10 via-indigo-500/10 to-violet-500/10"
                 )}
             >
                 <div className="flex items-center gap-3">
                     <div
                         className={cn(
                             "flex size-10 shrink-0 items-center justify-center rounded-xl",
-                            isPaused ? "bg-amber-500/20 text-amber-600" : "bg-emerald-500/20 text-emerald-600"
+                            isPaused
+                                ? "bg-rose-500/15 text-rose-600"
+                                : "bg-gradient-to-br from-sky-500/20 to-indigo-500/20 text-indigo-600"
                         )}
                     >
                         {isPaused ? <Pause className="size-5" /> : <Play className="size-5" />}
                     </div>
                     <div>
                         <div className="flex items-center gap-2">
-                            <h2 className="text-lg font-semibold">Engine Controls</h2>
-                            <Badge variant={isPaused ? "destructive" : "default"}>
+                            <h2 className="text-lg font-semibold">
+                                {isPaused ? "Automatic syncs are OFF" : "Automatic syncs are ON"}
+                            </h2>
+                            {/* <Badge variant={isPaused ? "destructive" : "default"}>
                                 {isPaused ? "Paused" : "Running"}
-                            </Badge>
+                            </Badge> */}
                         </div>
                         <p className="text-sm text-muted-foreground">
                             {isPaused
-                                ? "Engine is paused. Resume to continue scheduled sync operations."
-                                : "Engine is running. Changes apply to pending sync operations."}
+                                ? "File changes are still being tracked. Resume to continue scheduled sync operations."
+                                : "See below for pending sync operations."}
                         </p>
                     </div>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
+                    <Button
+                        size="lg"
+                        className="bg-gradient-to-r from-sky-500 to-indigo-500 text-white shadow-md hover:from-sky-600 hover:to-indigo-600"
+                    >
+                        <RefreshCw className="mr-2 size-4" /> Sync All Now
+                    </Button>
                     {isPaused ? (
                         <Button
                             size="lg"
-                            className="bg-emerald-600 text-white shadow-md hover:bg-emerald-700"
+                            className="bg-indigo-600 text-white shadow-md hover:bg-indigo-700"
                             onClick={() => setIsPaused(false)}
                         >
-                            <Play className="mr-2 size-4" /> Resume Sync
+                            <Play className="mr-2 size-4" /> Resume
                         </Button>
                     ) : (
                         <Button
                             size="lg"
-                            className="bg-amber-500 text-white shadow-md hover:bg-amber-600"
+                            className="bg-red-600/75 text-white shadow-md hover:bg-red-700/75"
                             onClick={() => setIsPaused(true)}
                         >
-                            <Pause className="mr-2 size-4" /> Pause Engine
+                            <Pause className="mr-2 size-4" /> Pause
                         </Button>
                     )}
-                    <Button
-                        size="lg"
-                        className="bg-sky-600 text-white shadow-md hover:bg-sky-700"
-                    >
-                        <RefreshCw className="mr-2 size-4" /> Sync All Now
-                    </Button>
                 </div>
             </div>
 

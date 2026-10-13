@@ -270,7 +270,8 @@ export function Folders() {
 											</TooltipTrigger>
 											<TooltipContent>
 												All items up to date.
-												Last modification monitored: 2026/12/23
+												<br/>
+												Last modified: 2026/12/23
 											</TooltipContent>
 										</Tooltip>
 									</TableCell>
