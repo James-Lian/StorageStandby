@@ -107,7 +107,6 @@ namespace StorageStandby.Backend.Models
         // maybe: saving a config file in the cloud as well??
         public string? ConfigFileId { get; set; }
 
-        public bool StoreZip { get; set; } = false;
         public CloudAssignmentState State { get; set; } = CloudAssignmentState.PendingBootstrap;
         public string? LastError { get; set; }
     }
