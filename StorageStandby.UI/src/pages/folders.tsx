@@ -1,5 +1,5 @@
-import { ArrowDownUp, Ellipsis, ArrowUp, ArrowDown, Grid, List, Plus, Trash2, Upload, CircleCheck, CircleX } from "lucide-react"
-import { useEffect, useMemo, useState } from "react"
+import { ArrowDownUp, Ellipsis, Plus, Trash2, Upload, CircleCheck, CircleX } from "lucide-react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { ButtonGroup } from "@/components/ui/button-group"
@@ -33,6 +33,8 @@ import {
 import { PROBLEMATIC_FOLDER_TYPE } from "@/types/folders"
 import type { WatchedFolder } from "@/types/data"
 import { refreshWatchedFolders, useWatchedFolders } from "@/lib/watched-folders"
+import { notifyError, notifySuccess } from "@/lib/notifications"
+import { readErrorDetails } from "@/lib/read-errors-utils"
 
 
 // TODO: setIsIgnoreRulesOpen(true)
@@ -69,18 +71,96 @@ const formatDate = (value: string | null) =>
 // Synced? column (Y, N, Syncing...) + add spinner to the name column
 // stored locations column: (local, Google Drive, OneCloud (pending), etc.)
 
+type FolderPickerMessage =
+	| {
+			type: "folder-selected"
+			path: string
+		}
+	| {
+			type: "folder-picker-cancelled"
+		}
+
+type WebViewBridge = {
+	postMessage: (message: string) => void
+	addEventListener: (type: "message", listener: (event: MessageEvent<unknown>) => void) => void
+	removeEventListener: (type: "message", listener: (event: MessageEvent<unknown>) => void) => void
+}
+
+declare global {
+	interface Window {
+		chrome?: {
+			webview?: WebViewBridge
+		}
+		showDirectoryPicker?: () => Promise<FileSystemDirectoryHandle>
+	}
+}
+
+const isFolderPickerMessage = (value: unknown): value is FolderPickerMessage => {
+	if (typeof value !== "object" || value === null || !("type" in value)) {
+		return false
+	}
+
+	const message = value as { type?: unknown; path?: unknown }
+	if (message.type === "folder-picker-cancelled") {
+		return true
+	}
+
+	return message.type === "folder-selected" && typeof message.path === "string" && message.path.length > 0
+}
+
 export function Folders() {
 	const { folders, isLoading, error } = useWatchedFolders()
-	const [mode, setMode] = useState<"list" | "grid">("list")
 	const [search, setSearch] = useState("")
 	
 	const [selectedFolder, setSelectedFolder] = useState<WatchedFolder | null>(null)
 	const [selectedRows, setSelectedRows] = useState<Array<number>>([])
 	const [sortMethod, setSortMethod] = useState<string>("path");
 
+	const addFolder = useCallback(async (path: string) => {
+		try {
+			const response = await fetch("http://storagestandby.local/api/folders/add", {
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+				},
+				body: JSON.stringify({ localPath: path }),
+			})
+
+			if (!response.ok) {
+				const details = await readErrorDetails(response)
+				throw new Error(details.problem?.detail ?? details.problem?.title ?? `Folder could not be added (HTTP ${response.status}).`)
+			}
+
+			notifySuccess({
+				title: "Folder added",
+				summary: path,
+			})
+			await refreshWatchedFolders()
+		} catch (error) {
+			notifyError({
+				title: "Unable to add folder",
+				summary: error instanceof Error ? error.message : "An unknown error occurred.",
+			})
+		}
+	}, [])
+
 	useEffect(() => {
 		void refreshWatchedFolders()
-	}, [])
+
+		const handleFolderPickerMessage = (event: MessageEvent<unknown>) => {
+			if (!isFolderPickerMessage(event.data) || event.data.type === "folder-picker-cancelled") {
+				return
+			}
+
+			void addFolder(event.data.path)
+		}
+
+		window.chrome?.webview?.addEventListener("message", handleFolderPickerMessage)
+
+		return () => {
+			window.chrome?.webview?.removeEventListener("message", handleFolderPickerMessage)
+		}
+	}, [addFolder])
 
     const appendToSelectedRows = (elem: number) => {
         setSelectedRows((selectedRows) => [...selectedRows, elem])
@@ -103,9 +183,52 @@ export function Folders() {
 
 	// ---------------------------
 	// Adding Folders
-	const handleAddFolder = () => {
-		
-	};
+	const handleAddFolder = async () => {
+		const webView = window.chrome?.webview
+		if (webView) {
+			webView.postMessage("pick-folder")
+			return
+		}
+
+		if (!window.showDirectoryPicker) {
+			notifyError({
+				title: "Folder picker unavailable",
+				summary: "Open StorageStandby in the desktop app, or use a Chromium-based browser for development.",
+			})
+			return
+		}
+
+		try {
+			const directoryHandle = await window.showDirectoryPicker()
+			const path = window.prompt(
+				`Development fallback: enter the absolute path for "${directoryHandle.name}".`,
+				"",
+			)?.trim()
+
+			if (!path) {
+				return
+			}
+
+			if (!/^(?:[A-Za-z]:[\\/]|\\\\)/.test(path)) {
+				notifyError({
+					title: "Invalid folder path",
+					summary: "Enter an absolute Windows path, such as C:\\Users\\you\\Documents.",
+				})
+				return
+			}
+
+			await addFolder(path)
+		} catch (error) {
+			if (error instanceof DOMException && error.name === "AbortError") {
+				return
+			}
+
+			notifyError({
+				title: "Unable to select folder",
+				summary: error instanceof Error ? error.message : "An unknown error occurred.",
+			})
+		}
+	}
 
 	return (
 		<div className="space-y-6 p-4">
@@ -113,20 +236,11 @@ export function Folders() {
 				<div className="space-y-2">
 					<h1 className="text-2xl font-semibold">Backup folders</h1>
 					<p className="text-sm text-muted-foreground">
-						Manage folders and files selected for backup. Switch between a folder list and a selected folder contents grid.
+						Manage folders and files selected for backup.
 					</p>
 				</div>
 
 				<div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-					<div className="flex items-center gap-2">
-						<Button variant={mode === "list" ? "default" : "outline"} size="sm" onClick={() => setMode("list")}>
-							<List className="size-4" /> List
-						</Button>
-						<Button variant={mode === "grid" ? "default" : "outline"} size="sm" onClick={() => setMode("grid")}>
-							<Grid className="size-4" /> Grid
-						</Button>
-					</div>
-
 					<div className="flex items-center gap-2">
 						<Input
 							list="folder-tags"
@@ -183,195 +297,141 @@ export function Folders() {
 								</SelectGroup>
 							</SelectContent>
 						</Select>
-						<ButtonGroup>
-							<Button variant={mode === "list" ? "default" : "outline"} size="sm" onClick={() => setMode("list")}>List</Button>
-							<Button variant={mode === "grid" ? "default" : "outline"} size="sm" onClick={() => setMode("grid")}>Grid</Button>
-						</ButtonGroup>
 					</div>
 				</div>
 
-				{mode === "list" ? (
-					<Table>
-						<TableHeader className="sticky top-0 z-10">
+				<Table>
+					<TableHeader className="sticky top-0 z-10">
+						<TableRow>
+							<TableHead>
+								<Checkbox 
+									checked={selectedRows.length === filteredFolders.length}
+									onCheckedChange={() => {
+										// all folders are selected
+										if (selectedRows.length === filteredFolders.length) {
+											setSelectedRows([]); // clearing selected folders
+										} else {
+											filteredFolders.forEach((item) => {
+												if (!selectedRows.includes(item.id)) {
+													appendToSelectedRows(item.id);
+												}
+											});
+										}
+									}}
+									className="border-black"
+								/>
+							</TableHead>
+							<TableHead>Name</TableHead>
+							<TableHead>Sync status</TableHead>
+							<TableHead>Last synced</TableHead>
+							<TableHead>Clouds</TableHead>
+							<TableHead>Problem</TableHead>
+							<TableHead className="text-right"></TableHead>
+						</TableRow>
+					</TableHeader>
+					<TableBody>
+						{filteredFolders.length == 0 && 
 							<TableRow>
-								<TableHead>
+								<TableCell colSpan={7} className="text-center py-6">
+									<p className="text-sm text-muted-foreground">No folders added.</p>
+								</TableCell>
+							</TableRow>
+						}
+						{filteredFolders.map((folder) => (
+							<TableRow key={folder.id} className={selectedRows.includes(folder.id) ? "bg-muted" : ""}>
+								<TableCell>
 									<Checkbox 
-										checked={selectedRows.length === filteredFolders.length}
+										checked={selectedRows.includes(folder.id)} 
 										onCheckedChange={() => {
-											// all folders are selected
-											if (selectedRows.length === filteredFolders.length) {
-												setSelectedRows([]); // clearing selected folders
+											const isSelected = selectedRows.includes(folder.id)
+											if (isSelected) {
+												removeFromSelectedRows(folder.id)
 											} else {
-												filteredFolders.forEach((item) => {
-													if (!selectedRows.includes(item.id)) {
-														appendToSelectedRows(item.id);
-													}
-												});
+												appendToSelectedRows(folder.id)
 											}
 										}}
 										className="border-black"
 									/>
-								</TableHead>
-								<TableHead>Name</TableHead>
-								<TableHead>Sync status</TableHead>
-								<TableHead>Last synced</TableHead>
-								<TableHead>Clouds</TableHead>
-								<TableHead>Problem</TableHead>
-								<TableHead className="text-right"></TableHead>
-							</TableRow>
-						</TableHeader>
-						<TableBody>
-							{filteredFolders.length == 0 && 
-								<TableRow>
-									<TableCell colSpan={7} className="text-center py-6">
-										<p className="text-sm text-muted-foreground">No folders added.</p>
-									</TableCell>
-								</TableRow>
-							}
-							{filteredFolders.map((folder) => (
-								<TableRow key={folder.id} className={selectedRows.includes(folder.id) ? "bg-muted" : ""}>
-									<TableCell>
-										<Checkbox 
-											checked={selectedRows.includes(folder.id)} 
-											onCheckedChange={() => {
-												const isSelected = selectedRows.includes(folder.id)
-												if (isSelected) {
-													removeFromSelectedRows(folder.id)
-												} else {
-													appendToSelectedRows(folder.id)
-												}
-											}}
-											className="border-black"
-										/>
-									</TableCell>
-									<TableCell>
-										<div className="inline-flex w-fit h-fit items-center gap-1">
-											<Tooltip>
-												<TooltipTrigger asChild>
-													<Button variant="link" className="cursor-pointer" onClick={() => {
-														setSelectedFolder(folder)
-														setMode("grid")
-													}}>
-														{getFolderName(folder)}
-													</Button>
-												</TooltipTrigger>
-												<TooltipContent>
-													{folder.localPath ?? "No local path"}
-												</TooltipContent>
-											</Tooltip>
-											<Tooltip>
-												<TooltipTrigger asChild>
-													{folder.problem === 0
-														? <CircleCheck className="size-4" />
-														: <CircleX className="size-4 text-destructive" />}
-												</TooltipTrigger>
-												<TooltipContent>
-													{getProblemLabel(folder.problem)}
-												</TooltipContent>
-											</Tooltip>
-										</div>
-									</TableCell>
-									<TableCell>
-										<Badge variant={getFolderStatus(folder) === "Synced" ? "default" : getFolderStatus(folder) === "Pending" ? "secondary" : "destructive"}>
-											{getFolderStatus(folder)}
-										</Badge>
-									</TableCell>
-									<TableCell>
-										{formatDate(folder.lastSync)}
-									</TableCell>
-									<TableCell>{folder.assignedClouds.length}</TableCell>
-									<TableCell>
-										<Badge variant="outline">{getProblemLabel(folder.problem)}</Badge>
-									</TableCell>
-									<TableCell className="text-right">
-										<DropdownMenu>
-											<DropdownMenuTrigger asChild>
-												<Button variant="ghost" size="sm">
-													<Ellipsis className="size-4" />
+								</TableCell>
+								<TableCell>
+									<div className="inline-flex w-fit h-fit items-center gap-1">
+										<Tooltip>
+											<TooltipTrigger asChild>
+												<Button variant="link" className="cursor-pointer" onClick={() => {
+													setSelectedFolder(folder)
+													setMode("grid")
+												}}>
+													{getFolderName(folder)}
 												</Button>
-											</DropdownMenuTrigger>
-											<DropdownMenuPortal>
-												<DropdownMenuContent>
-													<DropdownMenuItem>Edit folder</DropdownMenuItem>
-													<DropdownMenuItem>Rename</DropdownMenuItem>
-													<DropdownMenuItem variant="destructive">Delete</DropdownMenuItem>
-												</DropdownMenuContent>
-											</DropdownMenuPortal>
-										</DropdownMenu>
-									</TableCell>
-								</TableRow>
-							))}
-						</TableBody>
-						<TableFooter>
-							<TableRow>
-								<TableCell colSpan={7}>
-									<div className="flex flex-col gap-4 py-2 md:flex-row md:items-center md:justify-between">
-										<div className="flex flex-wrap items-center gap-2">
-											<Button 
-												variant="default" 
-												size="sm"
-												onClick={handleAddFolder}
-											>
-												<Plus className="size-4" /> Add folder
-											</Button>
-											<ButtonGroup>
-												<Button variant="outline" size="sm">
-													<ArrowUp className="size-4" />
-												</Button>
-												<Button variant="outline" size="sm">
-													<ArrowDown className="size-4" />
-												</Button>
-											</ButtonGroup>
-											<Button variant="outline" size="sm">
-												<Trash2 className="size-4" /> Remove
-											</Button>
-											<Button variant="outline" size="sm">
-												<Upload className="size-4" /> Upload files
-											</Button>
-										</div>
-										<div className="flex items-center gap-2">
-											<div className="rounded-full bg-muted px-3 py-1 text-xs font-medium uppercase tracking-[0.2em] text-muted-foreground">
-												{mode === "list" ? "List view" : "Grid view"}
-											</div>
-										</div>
+											</TooltipTrigger>
+											<TooltipContent>
+												{folder.localPath ?? "No local path"}
+											</TooltipContent>
+										</Tooltip>
+										<Tooltip>
+											<TooltipTrigger asChild>
+												{folder.problem === 0
+													? <CircleCheck className="size-4" />
+													: <CircleX className="size-4 text-destructive" />}
+											</TooltipTrigger>
+											<TooltipContent>
+												{getProblemLabel(folder.problem)}
+											</TooltipContent>
+										</Tooltip>
 									</div>
 								</TableCell>
-							</TableRow>
-						</TableFooter>
-					</Table>
-				) : (
-					<div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-						{selectedFolder ? (
-							<div className="rounded-2xl border border-border bg-background p-4">
-								<div className="mb-4 flex items-center justify-between gap-4">
-									<div>
-										<p className="text-sm text-muted-foreground">Contents of</p>
-										<h3 className="text-lg font-semibold">{getFolderName(selectedFolder)}</h3>
-									</div>
-									<Badge variant={getFolderStatus(selectedFolder) === "Synced" ? "default" : getFolderStatus(selectedFolder) === "Pending" ? "secondary" : "destructive"}>
-										{getFolderStatus(selectedFolder)}
+								<TableCell>
+									<Badge variant={getFolderStatus(folder) === "Synced" ? "default" : getFolderStatus(folder) === "Pending" ? "secondary" : "destructive"}>
+										{getFolderStatus(folder)}
 									</Badge>
+								</TableCell>
+								<TableCell>
+									{formatDate(folder.lastSync)}
+								</TableCell>
+								<TableCell>{folder.assignedClouds.length}</TableCell>
+								<TableCell>
+									<Badge variant="outline">{getProblemLabel(folder.problem)}</Badge>
+								</TableCell>
+								<TableCell className="text-right">
+									<DropdownMenu>
+										<DropdownMenuTrigger asChild>
+											<Button variant="ghost" size="sm">
+												<Ellipsis className="size-4" />
+											</Button>
+										</DropdownMenuTrigger>
+										<DropdownMenuPortal>
+											<DropdownMenuContent>
+												<DropdownMenuItem>Edit folder</DropdownMenuItem>
+												<DropdownMenuItem>Rename</DropdownMenuItem>
+												<DropdownMenuItem variant="destructive">Delete</DropdownMenuItem>
+											</DropdownMenuContent>
+										</DropdownMenuPortal>
+									</DropdownMenu>
+								</TableCell>
+							</TableRow>
+						))}
+					</TableBody>
+					<TableFooter>
+						<TableRow>
+							<TableCell colSpan={7}>
+								<div className="flex flex-col gap-4 py-2 md:flex-row md:items-center md:justify-between">
+									<div className="flex flex-wrap items-center gap-2">
+										<Button 
+											variant="default" 
+											size="sm"
+											onClick={handleAddFolder}
+										>
+											<Plus className="size-4" /> Add folder
+										</Button>
+										<Button variant="outline" size="sm">
+											<Trash2 className="size-4" /> Remove
+										</Button>
+									</div>
 								</div>
-								<div className="grid gap-3">
-									<div className="rounded-2xl border border-border bg-muted/50 p-4">
-										<p className="text-sm text-muted-foreground">Local path</p>
-										<p className="font-mono text-sm">{selectedFolder.localPath ?? "No local path"}</p>
-										<p className="mt-3 text-sm text-muted-foreground">Cloud assignments</p>
-										<p>{selectedFolder.assignedClouds.length}</p>
-										<p className="mt-3 text-sm text-muted-foreground">Ignore rules</p>
-										<p>{selectedFolder.ignoreRules || "None"}</p>
-										<p className="mt-3 text-sm text-muted-foreground">Last synced</p>
-										<p>{formatDate(selectedFolder.lastSync)}</p>
-										</div>
-								</div>
-							</div>
-						) : (
-							<div className="rounded-2xl border border-border bg-background p-4">
-								<p className="text-sm text-muted-foreground">Select a folder from the list to view its contents.</p>
-							</div>
-						)}
-					</div>
-				)}
+							</TableCell>
+						</TableRow>
+					</TableFooter>
+				</Table>
 			</div>
 		</div>
 	)
