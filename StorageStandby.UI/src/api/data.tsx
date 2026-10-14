@@ -33,11 +33,12 @@ export async function fetchWatchedFolder(localPath: string, fName: string = "fet
 
         if (!response.ok) {
             const details = await readErrorDetails(response);
+            const responseFailTitle = `${fName}: response invalid`;
             logApiProblemDetailsError({
-                fallbackTitle: "Response invalid; Failed to fetch all watched folders",
+                fallbackTitle: responseFailTitle,
                 details
             })
-            throw new Error("fetchAllWatchedFolders: Failed to fetch all watched folders");
+            throw new Error(responseFailTitle);
         }
 
         const data = await response.json();
@@ -128,9 +129,10 @@ export async function fetchSystemSettings(fName: string = "fetchSystemSettings")
     return ErrorHandlingWrapper(fName, async () => {
         const response = await fetch(`http://storagestandby.local/api/settings`);
         if (!response.ok) {
+            const responseFailTitle = `${fName}: response invalid`;
             const details = await readErrorDetails(response);
-            logApiProblemDetailsError({ fallbackTitle: `${fName}: Response invalid`, details });
-            throw new Error(`${fName}: Failed to fetch system settings`);
+            logApiProblemDetailsError({ fallbackTitle: responseFailTitle, details });
+            throw new Error(responseFailTitle);
         }
         return await response.json() as SystemSettings;
     });
@@ -146,4 +148,31 @@ export async function fetchSyncEvents(fName: string = "fetchSyncEvents"): Promis
         }
         return await response.json() as SyncEvent[];
     });
+}
+
+// ---------------------------------------------------------------------------
+// FILESYSTEM
+// ---------------------------------------------------------------------------
+
+export async function fetchOpenExplorer(folderPath: string, fName: string = "fetchOpenExplorer"): Promise<void> {
+    return ErrorHandlingWrapper(fName, async () => {
+        const response = await fetch(`http://storagestandby.local/api/fileSystem/open-explorer`, {
+            method: "POST",
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ localPath: folderPath }),
+        });
+
+        if (!response.ok) {
+            const details = await readErrorDetails(response);
+            const responseFailTitle = `${fName}: response invalid`;
+            logApiProblemDetailsError({
+                fallbackTitle: responseFailTitle,
+                details
+            })
+            throw new Error(responseFailTitle);
+        }
+
+    })
 }

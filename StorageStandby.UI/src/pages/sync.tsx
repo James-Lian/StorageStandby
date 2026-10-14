@@ -85,7 +85,7 @@ export function Sync() {
                         </div>
                         <p className="text-sm text-muted-foreground">
                             {isPaused
-                                ? "File changes are still being tracked. Resume to continue scheduled sync operations."
+                                ? "File changes are still being tracked."
                                 : "See below for pending sync operations."}
                         </p>
                     </div>
