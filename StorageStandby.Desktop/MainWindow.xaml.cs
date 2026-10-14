@@ -13,6 +13,9 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Navigation;
 using System.Windows.Shapes;
+using System.Text.Json;
+using System.Windows.Forms;
+using Microsoft.Web.WebView2.Core;
 
 // WPF Shell interceptor logic
 // WebView2 is hosted here, catches fetch reqs from frontend and forwards them to backend
@@ -45,6 +48,7 @@ namespace StorageStandby.Desktop
             // initialize underlying Chromium engine
             await webView.EnsureCoreWebView2Async();
             Debug.WriteLine("[InitializeWebViewBridge] WebView2 ready");
+            webView.CoreWebView2.WebMessageReceived += OnWebMessageReceived;
 
             // native .NET IPC magic: setup HttpClient to tunnel requests down the Named Pipe
             var socketsHandler = new SocketsHttpHandler
@@ -210,7 +214,7 @@ namespace StorageStandby.Desktop
                     catch (Exception ex)
                     {
                         Debug.WriteLine($"[InitializeWebViewBridge] Error: {ex}");
-                        MessageBox.Show($"WebView2 initialization failed: {ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                        System.Windows.MessageBox.Show($"WebView2 initialization failed: {ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
 
                         Debug.WriteLine($"[WebResourceRequested] Exception: {ex.Message}\n{ex.StackTrace}");
                         string errorJson = $"{{\"error\": \"Backend service unavailable\", \"details\": \"{ex.Message}\"}}";
@@ -260,6 +264,43 @@ namespace StorageStandby.Desktop
             webView.Source = new Uri("http://storagestandby.local/index.html");
 #endif
 
+        }
+
+        private void OnWebMessageReceived(
+            object? sender,
+            CoreWebView2WebMessageReceivedEventArgs args)
+        {
+            var message = args.TryGetWebMessageAsString();
+
+            if (message != "pick-folder")
+            {
+                return;
+            }
+
+            using var dialog = new FolderBrowserDialog
+            {
+                Description = "Select a folder to back up",
+                UseDescriptionForTitle = true,
+                ShowNewFolderButton = false,
+            };
+
+            if (dialog.ShowDialog() != System.Windows.Forms.DialogResult.OK)
+            {
+                webView.CoreWebView2.PostWebMessageAsJson(
+                    JsonSerializer.Serialize(new
+                    {
+                        type = "folder-picker-cancelled",
+                    }));
+
+                return;
+            }
+
+            webView.CoreWebView2.PostWebMessageAsJson(
+                JsonSerializer.Serialize(new
+                {
+                    type = "folder-selected",
+                    path = dialog.SelectedPath,
+                }));
         }
     }
 }
