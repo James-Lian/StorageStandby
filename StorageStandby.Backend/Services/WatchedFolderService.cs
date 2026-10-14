@@ -32,6 +32,21 @@ namespace StorageStandby.Backend.Services
             public CreateWatchedFolderResultStatus Status { get; set; }
             public string? Details { get; set; }
         }
+
+        public enum DeleteWatchedFolderResultStatus
+        {
+            Deleted,
+            NotFound
+        }
+
+        public class DeleteWatchedFolderResultDto
+        {
+            public DeleteWatchedFolderResultStatus Status { get; init; }
+            public long WatchedFolderId { get; init; }
+            public string? LocalPath { get; init; }
+            public int PendingItemsDeleted { get; init; }
+            public int SyncEventsDeleted { get; init; }
+        }
         public async Task<CreateWatchedFolderResultDto> CreateWatchedFolder(string path)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(path);
@@ -97,28 +112,80 @@ namespace StorageStandby.Backend.Services
             return candidatePath.StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
         }
 
-        public async Task DeleteWatchedFolder(string path)
+        // Delete a WatchedFolder with a path
+        public async Task<DeleteWatchedFolderResultDto> DeleteWatchedFolderFromPath(
+            string path,
+            CancellationToken cancellationToken = default)
         {
             await using var scope = _scopeFactory.CreateAsyncScope();
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
             var folder = await db.WatchedFolders
-                .SingleOrDefaultAsync(watchedFolder => watchedFolder.LocalPath == path);
+                .SingleOrDefaultAsync(
+                    watchedFolder => watchedFolder.LocalPath == path,
+                    cancellationToken);
             if (folder is null)
             {
-                return;
+                return new DeleteWatchedFolderResultDto
+                {
+                    Status = DeleteWatchedFolderResultStatus.NotFound
+                };
             }
 
+            return await DeleteWatchedFolderAsync(db, folder, cancellationToken);
+        }
+
+        // Delete a WatchedFolder with a matching Id prop
+        public async Task<DeleteWatchedFolderResultDto> DeleteWatchedFolderFromId(
+            long id,
+            CancellationToken cancellationToken = default)
+        {
+            await using var scope = _scopeFactory.CreateAsyncScope();
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+
+            var folder = await db.WatchedFolders
+                .SingleOrDefaultAsync(
+                    watchedFolder => watchedFolder.Id == id,
+                    cancellationToken);
+            if (folder is null)
+            {
+                return new DeleteWatchedFolderResultDto
+                {
+                    Status = DeleteWatchedFolderResultStatus.NotFound,
+                    WatchedFolderId = id
+                };
+            }
+
+            return await DeleteWatchedFolderAsync(db, folder, cancellationToken);
+        }
+
+        // Folder deletion helper function for Id and Path
+        private static async Task<DeleteWatchedFolderResultDto> DeleteWatchedFolderAsync(
+            AppDbContext db,
+            WatchedFolder folder,
+            CancellationToken cancellationToken)
+        {
             var pendingItems = await db.PendingSyncQueue
                 .Where(item => item.WatchedFolderId == folder.Id)
-                .ToListAsync();
+                .ToListAsync(cancellationToken);
             var syncEvents = await db.SyncEvents
                 .Where(syncEvent => syncEvent.WatchedFolderId == folder.Id)
-                .ToListAsync();
+                .ToListAsync(cancellationToken);
+
             db.PendingSyncQueue.RemoveRange(pendingItems);
+            db.SyncEvents.RemoveRange(syncEvents);
             db.WatchedFolders.Remove(folder);
 
-            await db.SaveChangesAsync();
+            await db.SaveChangesAsync(cancellationToken);
+
+            return new DeleteWatchedFolderResultDto
+            {
+                Status = DeleteWatchedFolderResultStatus.Deleted,
+                WatchedFolderId = folder.Id,
+                LocalPath = folder.LocalPath,
+                PendingItemsDeleted = pendingItems.Count,
+                SyncEventsDeleted = syncEvents.Count
+            };
         }
 
         public async Task SetProblemAsync(

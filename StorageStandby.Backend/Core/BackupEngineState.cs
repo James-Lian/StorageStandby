@@ -109,6 +109,20 @@ namespace StorageStandby.Backend.Core
             }
         }
 
+        public void NotifyFolderRemoved(string? path)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                return;
+            }
+
+            lock (_ActiveWatchedPathsLock)
+            {
+                ActiveWatchedPaths.RemoveAll(activePath =>
+                    string.Equals(activePath, path, StringComparison.OrdinalIgnoreCase));
+            }
+        }
+
         public async Task<IDisposable> AcquireSyncExecutionAsync(CancellationToken cancellationToken)
         {
             await _syncExecutionLock.WaitAsync(cancellationToken);
