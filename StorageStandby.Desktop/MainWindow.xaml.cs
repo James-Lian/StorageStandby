@@ -14,8 +14,9 @@ using System.Windows.Media.Imaging;
 using System.Windows.Navigation;
 using System.Windows.Shapes;
 using System.Text.Json;
-using System.Windows.Forms;
 using Microsoft.Web.WebView2.Core;
+using Forms = System.Windows.Forms;
+using Drawing = System.Drawing;
 
 // WPF Shell interceptor logic
 // WebView2 is hosted here, catches fetch reqs from frontend and forwards them to backend
@@ -24,8 +25,9 @@ namespace StorageStandby.Desktop
 {
     public partial class MainWindow : Window
     {
-        
         private HttpClient? _pipeClient;
+        private readonly Forms.NotifyIcon _trayIcon;
+        private bool _isExiting;
 
         public MainWindow()
         {
@@ -33,6 +35,7 @@ namespace StorageStandby.Desktop
             {
                 Debug.WriteLine("[MainWindow] Initializing MainWindow");
                 InitializeComponent();
+                _trayIcon = CreateTrayIcon();
                 _ = InitializeWebViewBridge();  
             }
             catch (Exception ex)
@@ -40,6 +43,70 @@ namespace StorageStandby.Desktop
                 Debug.WriteLine($"[MainWindow] Exception: {ex}");
                 throw;
             }
+        }
+
+        private Forms.NotifyIcon CreateTrayIcon()
+        {
+            var trayMenu = new Forms.ContextMenuStrip();
+            trayMenu.Items.Add("Open Storage-Standby", null, (_, _) => ShowWindow());
+            trayMenu.Items.Add(new Forms.ToolStripSeparator());
+            trayMenu.Items.Add("Exit", null, (_, _) => ExitApplication());
+
+            var trayIcon = new Forms.NotifyIcon
+            {
+                Icon = Drawing.SystemIcons.Application,
+                Text = "StorageStandby",
+                Visible = true,
+                ContextMenuStrip = trayMenu
+            };
+
+            trayIcon.DoubleClick += (_, _) => ShowWindow();
+            return trayIcon;
+        }
+
+        private void ShowWindow()
+        {
+            if (!IsVisible)
+            {
+                Show();
+            }
+
+            if (WindowState == WindowState.Minimized)
+            {
+                WindowState = WindowState.Normal;
+            }
+
+            Activate();
+        }
+
+        private void ExitApplication()
+        {
+            _isExiting = true;
+            Close();
+        }
+
+        protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
+        {
+            if (!_isExiting)
+            {
+                e.Cancel = true;
+                Hide();
+                _trayIcon.ShowBalloonTip(
+                    2000,
+                    "StorageStandby is still running",
+                    "The app was minimized to the system tray.",
+                    Forms.ToolTipIcon.Info);
+                return;
+            }
+
+            base.OnClosing(e);
+        }
+
+        protected override void OnClosed(EventArgs e)
+        {
+            _trayIcon.Visible = false;
+            _trayIcon.Dispose();
+            base.OnClosed(e);
         }
 
         private async Task InitializeWebViewBridge()
@@ -277,14 +344,14 @@ namespace StorageStandby.Desktop
                 return;
             }
 
-            using var dialog = new FolderBrowserDialog
+            using var dialog = new Forms.FolderBrowserDialog
             {
                 Description = "Select a folder to back up",
                 UseDescriptionForTitle = true,
                 ShowNewFolderButton = false,
             };
 
-            if (dialog.ShowDialog() != System.Windows.Forms.DialogResult.OK)
+            if (dialog.ShowDialog() != Forms.DialogResult.OK)
             {
                 webView.CoreWebView2.PostWebMessageAsJson(
                     JsonSerializer.Serialize(new
