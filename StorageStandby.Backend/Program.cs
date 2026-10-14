@@ -314,6 +314,28 @@ app.MapPost("/api/folders/add", async (
     return Results.Ok(new { Message = "Folder added successfully." });
 });
 
+// DELETE: Deleting a WatchedFolder with id identiifer
+app.MapDelete("/api/folders/{watchedFolderId:long}", async (
+    long watchedFolderId,
+    WatchedFolderService watchedFolderService,
+    BackupEngineState state,
+    CancellationToken cancellationToken) =>
+{
+    var result = await watchedFolderService.DeleteWatchedFolderFromId(
+        watchedFolderId,
+        cancellationToken);
+
+    if (result.Status == WatchedFolderService.DeleteWatchedFolderResultStatus.NotFound)
+    {
+        return Results.NotFound(result);
+    }
+
+    state.NotifyFolderRemoved(result.LocalPath);
+    return Results.Ok(result);
+});
+
+
+// DELETE: Removing cloud assignment from WatchedFolder
 app.MapDelete("/api/folders/{watchedFolderId:long}/clouds/{provider}/{accountId}", async (
     long watchedFolderId,
     Providers provider,
