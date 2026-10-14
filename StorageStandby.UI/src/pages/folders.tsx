@@ -39,7 +39,7 @@ import {
 	SelectValue,
 } from "@/components/ui/select"
 import { PROBLEMATIC_FOLDER_TYPE } from "@/types/folders"
-import type { WatchedFolder } from "@/types/data"
+import type { ProviderAccountCloud, WatchedFolder, WatchedFolderCloudMetadata } from "@/types/data"
 import { refreshWatchedFolders, useWatchedFolders } from "@/lib/watched-folders"
 import { notifyError, notifySuccess } from "@/lib/notifications"
 import { readErrorDetails } from "@/lib/read-errors-utils"
@@ -47,6 +47,7 @@ import { PROVIDER_METADATA, type Providers } from "@/types/providers"
 import { useConnectedAccounts } from "@/lib/connected-accounts"
 import { ConfirmationModal } from "@/components/confirmation-dialog"
 import { fetchOpenExplorer } from "@/api/data"
+import type { ConnectedAccount } from "@/api/accounts"
 
 
 // TODO: setIsIgnoreRulesOpen(true)
@@ -315,6 +316,20 @@ export function Folders() {
 		}
 	}
 
+	const inFolderAssignedClouds = (folder: WatchedFolder, account: ConnectedAccount, provider: Providers) => {
+		if (folder.assignedClouds.find(cloud => cloud.accountId == account.id && cloud.provider == provider)) {
+			return true
+		}
+		return false
+	}
+
+	const inUserAssignedClouds = (folder: WatchedFolder, account: ConnectedAccount, provider: Providers) => {
+		if (folder.userAssignedClouds.find(cloud => cloud.accountId == account.id && cloud.provider == provider)) {
+			return true
+		}
+		return false
+	}
+
 	return (
 		<div className="space-y-6 p-4">
 			<ConfirmationModal
@@ -495,8 +510,8 @@ export function Folders() {
 								<TableCell>
 									<Combobox
 										multiple
-										value={folder.assignedClouds.map((cloud) => `${cloud.provider}:${cloud.accountId}`)}
-										onValueChange={() => undefined}
+										value={[...folder.assignedClouds.map((cloud) => `${cloud.provider}:${cloud.accountId}`), ...folder.userAssignedClouds.map((cloud) => `${cloud.provider}:${cloud.accountId}`)]}
+										onValueChange={(value) => undefined}
 									>
 										<ComboboxTrigger aria-label={`${folder.assignedClouds.length} assigned cloud accounts`}>
 											<ComboboxValue>{folder.assignedClouds.length}</ComboboxValue>
@@ -508,7 +523,7 @@ export function Folders() {
 												) : (
 													Object.entries(accountsByProvider).flatMap(([provKey, accounts]) => {
 														const prov: Providers = Number(provKey) as Providers
-														const Icon = PROVIDER_METADATA[prov].icon
+														const Icon = PROVIDER_METADATA[prov].icon 
 														
 														return accounts.map((account) => (
 															<ComboboxItem
@@ -516,9 +531,14 @@ export function Folders() {
 																value={`${prov}:${account.id}`}
 															>
 																<Icon />
-																<span className="min-w-0 truncate">
+																<span className={inFolderAssignedClouds(folder, account, prov) ? "min-w-0 truncate text-blue-600" : "min-w-0 truncate"}>
 																	{account.email ?? "Unknown account"}
 																</span>
+																{
+																	inFolderAssignedClouds(folder, account, prov) ? <CircleCheck /> 
+																	: inUserAssignedClouds(folder, account, prov) ? <CircleDashed />
+																	: <></>
+																}
 															</ComboboxItem>
 														))
 													})
