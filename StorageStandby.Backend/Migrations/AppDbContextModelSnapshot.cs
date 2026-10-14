@@ -258,9 +258,6 @@ namespace StorageStandby.Backend.Migrations
                     b.Property<int>("State")
                         .HasColumnType("INTEGER");
 
-                    b.Property<bool>("StoreZip")
-                        .HasColumnType("INTEGER");
-
                     b.Property<long>("WatchedFolderId")
                         .HasColumnType("INTEGER");
 
