@@ -191,32 +191,6 @@ app.MapPost("/api/sync/trigger", async (
     return Results.Ok(new { Message = "Sync completed or recorded unfinished work." });
 });
 
-// POST: React adding a new folder to track
-app.MapPost("/api/folders/add", async (
-    WatchedFolder request, 
-    WatchedFolderService watchedFolderService,
-    BackupEngineState state) =>
-{
-    if (string.IsNullOrWhiteSpace(request.LocalPath))
-    {
-        return Results.BadRequest(new { Message = "A local folder path is required." });
-    }
-
-    var result = await watchedFolderService.CreateWatchedFolder(request.LocalPath);
-    if (result.Status == WatchedFolderService.CreateWatchedFolderResultStatus.AlreadyExists)
-    {
-        return Results.Conflict(new { Message = "Folder is already being tracked." });
-    }
-    if (result.Status == WatchedFolderService.CreateWatchedFolderResultStatus.Failure)
-    {
-        return Results.BadRequest(new { Message = result.Details });
-    }
-
-    state.NotifyNewFolderAdded(request.LocalPath);
-
-    return Results.Ok(new { Message = "Folder added successfully." });
-});
-
 // -------------------------------------------------------------------
 // (!!) LOCAL FILESYSTEM REST API ENDPOINTS (!!)
 // -------------------------------------------------------------------
@@ -312,6 +286,32 @@ app.MapPost("/api/folders/{watchedFolderId:long}/clouds", async (
         request.AccountId,
         cancellationToken);
     return Results.Ok(new { Message = "Cloud assignment added." });
+});
+
+// POST: React adding a new folder to track
+app.MapPost("/api/folders/add", async (
+    WatchedFolder request, 
+    WatchedFolderService watchedFolderService,
+    BackupEngineState state) =>
+{
+    if (string.IsNullOrWhiteSpace(request.LocalPath))
+    {
+        return Results.BadRequest(new { Message = "A local folder path is required." });
+    }
+
+    var result = await watchedFolderService.CreateWatchedFolder(request.LocalPath);
+    if (result.Status == WatchedFolderService.CreateWatchedFolderResultStatus.AlreadyExists)
+    {
+        return Results.Conflict(new { Message = "Folder is already being tracked." });
+    }
+    if (result.Status == WatchedFolderService.CreateWatchedFolderResultStatus.Failure)
+    {
+        return Results.BadRequest(new { Message = result.Details });
+    }
+
+    state.NotifyNewFolderAdded(request.LocalPath);
+
+    return Results.Ok(new { Message = "Folder added successfully." });
 });
 
 app.MapDelete("/api/folders/{watchedFolderId:long}/clouds/{provider}/{accountId}", async (
