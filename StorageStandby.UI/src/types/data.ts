@@ -1,3 +1,5 @@
+import type { Providers } from "./providers"
+
 export type WatchedFolder = {
     id: number
     localPath: string | null
@@ -13,7 +15,7 @@ export type WatchedFolder = {
 
 export type WatchedFolderCloudMetadata = {
     id: number
-    provider: number
+    provider: Providers
     accountId: string
     remoteFolderId: string
     watchedFolderId: number

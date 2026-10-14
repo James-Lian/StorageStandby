@@ -4,7 +4,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { Separator } from "@/components/ui/separator"
-import { Box, Folder, HardDrive, Plus } from "lucide-react"
+import { Plus } from "lucide-react"
 import React, { useEffect, useMemo, useRef, type RefObject, type ElementType } from "react"
 import { useLocation } from "react-router-dom"
 import { PROVIDERS, PROVIDER_METADATA } from "@/types/providers"
@@ -31,7 +31,7 @@ export function Link() {
 		[PROVIDERS.Dropbox]: [],
 	})
 	const { accountsByProvider } = useConnectedAccounts()
-
+	
 	type Provider = {
 		key: Providers
 		name: string
@@ -48,7 +48,7 @@ export function Link() {
 				key: PROVIDERS.Google,
 				name: PROVIDER_METADATA[PROVIDERS.Google].displayName,
 				description: PROVIDER_METADATA[PROVIDERS.Google].description,
-				icon: Folder,
+				icon: PROVIDER_METADATA[PROVIDERS.Google].icon,
 				ref: googleDriveRef,
 				open: googleDriveOpen,
 				setOpen: setGoogleDriveOpen,
@@ -57,7 +57,7 @@ export function Link() {
 				key: PROVIDERS.Microsoft,
 				name: PROVIDER_METADATA[PROVIDERS.Microsoft].displayName,
 				description: PROVIDER_METADATA[PROVIDERS.Microsoft].description,
-				icon: HardDrive,
+				icon: PROVIDER_METADATA[PROVIDERS.Microsoft].icon,
 				ref: oneDriveRef,
 				open: oneDriveOpen,
 				setOpen: setOneDriveOpen,
@@ -66,7 +66,7 @@ export function Link() {
 				key: PROVIDERS.Dropbox,
 				name: PROVIDER_METADATA[PROVIDERS.Dropbox].displayName,
 				description: PROVIDER_METADATA[PROVIDERS.Dropbox].description,
-				icon: Box,
+				icon: PROVIDER_METADATA[PROVIDERS.Dropbox].icon,
 				ref: dropboxRef,
 				open: dropboxOpen,
 				setOpen: setDropboxOpen,

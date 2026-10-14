@@ -1,3 +1,5 @@
+import { Box, Folder, HardDrive, type LucideIcon } from "lucide-react"
+
 // plain old JS alternative to enums
 export const PROVIDERS = {
     Google: 0,
@@ -16,6 +18,7 @@ export type ProviderMetadata = {
     providerName: string
     displayName: string
     description: string
+    icon: LucideIcon
 }
 
 export const PROVIDER_METADATA: Record<Providers, ProviderMetadata> = {
@@ -24,18 +27,21 @@ export const PROVIDER_METADATA: Record<Providers, ProviderMetadata> = {
         providerName: "Google",
         displayName: "Google Drive",
         description: "Connect Google Drive to sync your documents, spreadsheets, and shared folders.",
+        icon: Folder,
     },
     [PROVIDERS.Microsoft]: {
         providerStr: "microsoft",
         providerName: "Microsoft",
         displayName: "OneDrive",
         description: "Connect OneDrive to keep your files available across desktop and cloud.",
+        icon: HardDrive
     },
     [PROVIDERS.Dropbox]: {
         providerStr: "dropbox",
         providerName: "Dropbox",
         displayName: "Dropbox",
         description: "Connect Dropbox to access your shared files and folder backups.",
+        icon: Box
     },
 }
 
