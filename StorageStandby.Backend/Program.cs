@@ -209,12 +209,25 @@ app.MapGet("/api/fileSystem/isfolder/{localPath}", (
     return fileSystem.IsFolder(localPath);
 });
 
-// Hmm... Ecosia spat out a bunch
 app.MapGet("/api/fileSystem/folder/getchildrencount", (
     string localPath,
     LocalFileSystemService fileSystem) =>
 {
     return fileSystem.GetChildrenCount(localPath);
+});
+
+app.MapPost("/api/fileSystem/open-explorer", (
+    string localPath,
+    LocalFileSystemService fileSystem) =>
+{
+    if (fileSystem.IsFolder(localPath) == true)
+    {
+        fileSystem.OpenExplorer(localPath);
+        return Results.Ok();
+    } else
+    {
+        return Results.Problem("Not a valid folder path.");
+    }
 });
 
 // -------------------------------------------------------------------

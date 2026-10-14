@@ -1,5 +1,10 @@
 using System.Text.RegularExpressions;
 using StorageStandby.Backend.Models;
+using System.Diagnostics;
+using System.IO;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Http;
+
 
 namespace StorageStandby.Backend.Services
 {
@@ -114,6 +119,19 @@ namespace StorageStandby.Backend.Services
             return null;
         }
 
+
+        public void OpenExplorer(string path)
+        {
+            if (Directory.Exists(path))
+            {
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = "explorer.exe",
+                Arguments = $"\"{path}\"",
+                UseShellExecute = true 
+            });
+            }
+        }
 
         // ------------------------------------------------------------------------------------------------------------
         // Ignore Rules-Related Methods (see WatchedFolder and FileSystemWatcherWorker)

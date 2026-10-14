@@ -6,7 +6,7 @@
         xmlns:local="clr-namespace:StorageStandby.Desktop"
         xmlns:wv2="clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf"
         mc:Ignorable="d"
-        Title="Storage-Standby" Height="896" Width="1163">
+        Title="StorageStandby" Height="896" Width="1163">
     <Grid>
         <wv2:WebView2 Name="webView" Source="http://localhost:5173" />
     </Grid>
