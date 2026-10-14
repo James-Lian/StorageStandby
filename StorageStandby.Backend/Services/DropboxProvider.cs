@@ -527,6 +527,24 @@ namespace StorageStandby.Backend.Services
             }
         }
 
+        public async Task<AuthResult> RevokeOAuthAsync(string accountId)
+        {
+            CloudToken? token = await _tokenManager.GetRefreshTokenAsync(Providers.Dropbox, accountId);
+            if (token is null)
+            {
+                return new AuthResult { Success = false, Message = "No Dropbox account found." };
+            }
+
+            string refreshToken = _dataProtector
+                .CreateProtector("DropboxTokenProtector")
+                .Unprotect(token.EncryptedRefreshToken);
+            using var client = CreateDropboxClient(refreshToken);
+            await client.Auth.TokenRevokeAsync();
+
+            await _tokenManager.DeleteRefreshTokenAsync(Providers.Dropbox, accountId);
+            return new AuthResult { Success = true, Message = "Dropbox connection revoked." };
+        }
+
         private static async Task EnsureSuccessAsync(HttpResponseMessage response)
         {
             if (!response.IsSuccessStatusCode)
