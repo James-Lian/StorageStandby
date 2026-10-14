@@ -3,6 +3,15 @@ import { useCallback, useEffect, useMemo, useState } from "react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
+	Combobox,
+	ComboboxContent,
+	ComboboxEmpty,
+	ComboboxItem,
+	ComboboxList,
+	ComboboxTrigger,
+	ComboboxValue,
+} from "@/components/ui/combobox"
+import {
 	DropdownMenu,
 	DropdownMenuContent,
 	DropdownMenuItem,
@@ -34,9 +43,10 @@ import type { WatchedFolder } from "@/types/data"
 import { refreshWatchedFolders, useWatchedFolders } from "@/lib/watched-folders"
 import { notifyError, notifySuccess } from "@/lib/notifications"
 import { readErrorDetails } from "@/lib/read-errors-utils"
-import { PROVIDER_METADATA } from "@/types/providers"
+import { PROVIDER_METADATA, type Providers } from "@/types/providers"
 import { useConnectedAccounts } from "@/lib/connected-accounts"
 import { ConfirmationModal } from "@/components/confirmation-dialog"
+import { fetchOpenExplorer } from "@/api/data"
 
 
 // TODO: setIsIgnoreRulesOpen(true)
@@ -112,12 +122,20 @@ const isFolderPickerMessage = (value: unknown): value is FolderPickerMessage => 
 }
 
 export function Folders() {
+	// --------------------------------------
+	// Stores
+	const { accountsByProvider, counts } = useConnectedAccounts()
+
+	// --------------------------------------
+	// Component variables
 	const { folders, isLoading, error } = useWatchedFolders()
 	const [search, setSearch] = useState("")
 	
 	// stores ids of WatchedFolders
 	const [selectedRows, setSelectedRows] = useState<Array<number>>([])
 	const [sortMethod, setSortMethod] = useState<string>("path");
+
+	// removing folders confirmation dialog
 	const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false)
 	const [pendingDeleteIds, setPendingDeleteIds] = useState<number[]>([])
 
@@ -191,7 +209,7 @@ export function Folders() {
 	const tagOptions = ["Healthy", "Path not found", "Too large", "Too many files", "Issue"];
 
 	// ---------------------------
-	// Adding Folders
+	// Adding/Removing Folders
 	const handleAddFolder = async () => {
 		const webView = window.chrome?.webview
 		if (webView) {
@@ -281,9 +299,21 @@ export function Folders() {
 			})
 		}
 	}
+
 	// -------------------------------
 	// Folder display information
-	const { accountsByProvider } = useConnectedAccounts()
+
+	const handleOpenExplorer = (path: string | null) => {
+		if (path) {
+			fetchOpenExplorer(path);
+		}
+		else {
+			notifyError({
+				title: "Path is null",
+				details: "Cannot open explorer; path variable is null"
+			})
+		}
+	}
 
 	return (
 		<div className="space-y-6 p-4">
@@ -463,16 +493,39 @@ export function Folders() {
 									{formatDate(folder.lastSync)}
 								</TableCell>
 								<TableCell>
-									<div>
-										{folder.assignedClouds.length == 0 ? 0
-										: folder.assignedClouds.map((cloud) => {
-											const Icon = PROVIDER_METADATA[cloud.provider].icon
-											const email = accountsByProvider[cloud.provider].find(account => account.id == cloud.accountId)?.email
-											return (<Badge>
-												<Icon/> <span className="truncate">{email}</span>
-											</Badge>)
-										})}
-									</div>
+									<Combobox
+										multiple
+										value={folder.assignedClouds.map((cloud) => `${cloud.provider}:${cloud.accountId}`)}
+										onValueChange={() => undefined}
+									>
+										<ComboboxTrigger aria-label={`${folder.assignedClouds.length} assigned cloud accounts`}>
+											<ComboboxValue>{folder.assignedClouds.length}</ComboboxValue>
+										</ComboboxTrigger>
+										<ComboboxContent>
+											<ComboboxList>
+												{counts[0] + counts[1] + counts[2] === 0 ? (
+													<ComboboxEmpty>No cloud accounts available</ComboboxEmpty>
+												) : (
+													Object.entries(accountsByProvider).flatMap(([provKey, accounts]) => {
+														const prov: Providers = Number(provKey) as Providers
+														const Icon = PROVIDER_METADATA[prov].icon
+														
+														return accounts.map((account) => (
+															<ComboboxItem
+																key={`${prov}:${account.id}`}
+																value={`${prov}:${account.id}`}
+															>
+																<Icon />
+																<span className="min-w-0 truncate">
+																	{account.email ?? "Unknown account"}
+																</span>
+															</ComboboxItem>
+														))
+													})
+												)}
+											</ComboboxList>
+										</ComboboxContent>
+									</Combobox>
 								</TableCell>
 								<TableCell>
 									<Badge variant="outline">{getProblemLabel(folder.problem)}</Badge>
@@ -486,8 +539,9 @@ export function Folders() {
 										</DropdownMenuTrigger>
 										<DropdownMenuPortal>
 											<DropdownMenuContent>
-												<DropdownMenuItem>Edit folder</DropdownMenuItem>
-												<DropdownMenuItem>Rename</DropdownMenuItem>
+												<DropdownMenuItem
+													onClick={() => {handleOpenExplorer(folder.localPath)}}
+												>Open explorer</DropdownMenuItem>
 												<DropdownMenuItem 
 													variant="destructive"
 													onClick={() => {handleRemoveFolder(folder.id)}}
