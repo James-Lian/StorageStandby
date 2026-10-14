@@ -471,31 +471,105 @@ app.MapGet("/api/auth/google/accounts", async (
 
 // -------------------------------------------------------------------
 // AUTH: MICROSOFT REST API
-app.MapPost("/api/auth/microsoft/start", async () =>
+app.MapPost("/api/auth/microsoft/start", async (
+    OneDriveProvider oneDriveProvider
+) =>
 { 
+    AuthResult result = await oneDriveProvider.StartOAuthAsync();
 
-    return Results.Ok(); 
+    if (!result.Success)
+    {
+        return Results.Problem(detail: result.Message, statusCode: 400);
+    }
+
+    return Results.Ok(result);
 });
 
-app.MapGet("/api/auth/microsoft/accounts", () =>
-{
+app.MapPost("/api/auth/microsoft/revoke", async (
+    RevokeReq request,
+    OneDriveProvider oneDriveProvider
+) =>
+{ 
+    if (request == null || string.IsNullOrEmpty(request.AccountId))
+    {
+        return Results.BadRequest("AccountId field is missing.");
+    }
 
-    return Results.Ok(new List<object>());
+    AuthResult result = await oneDriveProvider.RevokeOAuthAsync(request.AccountId);
+
+    if (!result.Success)
+    {
+        return Results.Problem(detail: result.Message, statusCode: 400);
+    }
+
+    return Results.Ok(result);
+});
+
+app.MapGet("/api/auth/microsoft/accounts", async (
+    OneDriveProvider oneDriveProvider
+) =>
+{
+    try
+    {
+        var accounts = await oneDriveProvider.GetConnectedAccounts();
+        return Results.Ok(accounts);
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem(detail: "Failed to fetch accounts: " + ex.Message, statusCode: 500);
+    }
 });
 
 
 // -------------------------------------------------------------------
 // AUTH: DROPBOX REST API
-app.MapPost("/api/auth/dropbox/start", async () =>
+app.MapPost("/api/auth/dropbox/start", async (
+    DropboxProvider dropboxProvider
+) =>
 {
+    AuthResult result = await dropboxProvider.StartOAuthAsync();
 
-    return Results.Ok();
+    if (!result.Success)
+    {
+        return Results.Problem(detail: result.Message, statusCode: 400);
+    }
+
+    return Results.Ok(result);
 });
 
-app.MapGet("/api/auth/dropbox/accounts", () =>
-{
+app.MapPost("/api/auth/dropbox/revoke", async (
+    RevokeReq request,
+    DropboxProvider dropboxProvider
+) =>
+{ 
+    if (request == null || string.IsNullOrEmpty(request.AccountId))
+    {
+        return Results.BadRequest("AccountId field is missing.");
+    }
 
-    return Results.Ok(new List<object>());
+    AuthResult result = await dropboxProvider.RevokeOAuthAsync(request.AccountId);
+
+    if (!result.Success)
+    {
+        return Results.Problem(detail: result.Message, statusCode: 400);
+    }
+
+    return Results.Ok(result);
+});
+
+app.MapGet("/api/auth/dropbox/accounts", async (
+    DropboxProvider dropboxProvider
+) =>
+{
+    try
+    {
+        var accounts = await dropboxProvider.GetConnectedAccounts();
+        return Results.Ok(accounts);
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem(detail: "Failed to fetch accounts: " + ex.Message, statusCode: 500);
+    } 
 });
 
 await app.RunAsync();
