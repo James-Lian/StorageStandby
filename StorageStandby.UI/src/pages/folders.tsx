@@ -1,8 +1,7 @@
-import { ArrowDownUp, Ellipsis, Plus, Trash2, Upload, CircleCheck, CircleX } from "lucide-react"
+import { ArrowDownUp, Ellipsis, Plus, Trash2, CircleCheck, CircleX, CircleDashed } from "lucide-react"
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { ButtonGroup } from "@/components/ui/button-group"
 import {
 	DropdownMenu,
 	DropdownMenuContent,
@@ -35,6 +34,9 @@ import type { WatchedFolder } from "@/types/data"
 import { refreshWatchedFolders, useWatchedFolders } from "@/lib/watched-folders"
 import { notifyError, notifySuccess } from "@/lib/notifications"
 import { readErrorDetails } from "@/lib/read-errors-utils"
+import { PROVIDER_METADATA } from "@/types/providers"
+import { useConnectedAccounts } from "@/lib/connected-accounts"
+import { ConfirmationModal } from "@/components/confirmation-dialog"
 
 
 // TODO: setIsIgnoreRulesOpen(true)
@@ -58,6 +60,7 @@ const getProblemLabel = (problem: number) => {
 	}
 }
 
+// TODO: redo
 const getFolderStatus = (folder: WatchedFolder) =>
 	folder.problem === PROBLEMATIC_FOLDER_TYPE.None
 		? folder.lastSync ? "Synced" : "Pending"
@@ -112,10 +115,14 @@ export function Folders() {
 	const { folders, isLoading, error } = useWatchedFolders()
 	const [search, setSearch] = useState("")
 	
-	const [selectedFolder, setSelectedFolder] = useState<WatchedFolder | null>(null)
+	// stores ids of WatchedFolders
 	const [selectedRows, setSelectedRows] = useState<Array<number>>([])
 	const [sortMethod, setSortMethod] = useState<string>("path");
+	const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false)
+	const [pendingDeleteIds, setPendingDeleteIds] = useState<number[]>([])
 
+	// listens for WebView2 message from native folder picker in useEffect, e.g. {"type": "folder-selected", "path": "C:\example"}
+	// useCallback memoizes the function
 	const addFolder = useCallback(async (path: string) => {
 		try {
 			const response = await fetch("http://storagestandby.local/api/folders/add", {
@@ -144,6 +151,8 @@ export function Folders() {
 		}
 	}, [])
 
+	// 1. Refresh WatchedFolders from backend
+	// 2. Setup event listener for message from WebView2 folder picker
 	useEffect(() => {
 		void refreshWatchedFolders()
 
@@ -230,8 +239,76 @@ export function Folders() {
 		}
 	}
 
+	const handleRemoveFolders = (ids: number[]) => {
+		if (ids.length === 0) return
+
+		setPendingDeleteIds(ids)
+		setIsDeleteDialogOpen(true)
+	}
+
+	const handleRemoveFolder = (id: number) => {
+		setPendingDeleteIds([id])
+		setIsDeleteDialogOpen(true)
+	}
+
+	const confirmRemoval = async () => {
+		try {
+			await Promise.all(
+				pendingDeleteIds.map(async (id) => {
+					const response = await fetch(`http://storagestandby.local/api/folders/${id}`, {
+						method: "DELETE",
+					})
+
+					if (!response.ok) {
+						const details = await readErrorDetails(response)
+						throw new Error(
+							details.problem?.detail ??
+							details.problem?.title ??
+							`Folder could not be deleted (HTTP ${response.status}).`
+						)
+					}
+				})
+			)
+
+			setSelectedRows([])
+			setPendingDeleteIds([])
+			setIsDeleteDialogOpen(false)
+			await refreshWatchedFolders()
+		} catch (error) {
+			notifyError({
+				title: "Unable to delete folder(s)",
+				summary: error instanceof Error ? error.message : "An unknown error occurred.",
+			})
+		}
+	}
+	// -------------------------------
+	// Folder display information
+	const { accountsByProvider } = useConnectedAccounts()
+
 	return (
 		<div className="space-y-6 p-4">
+			<ConfirmationModal
+				isOpen={isDeleteDialogOpen}
+				onClose={() => {
+					setIsDeleteDialogOpen(false)
+					setPendingDeleteIds([])
+				}}
+				onConfirm={confirmRemoval}
+				title={
+					pendingDeleteIds.length === 1
+						? "Delete 1 folder?"
+						: `Delete ${pendingDeleteIds.length} folders?`
+				}
+				description={
+					<>
+						<span>Deleting this folder removes its local tracking history.</span>
+						<span className="mt-1 block">
+							(Synced cloud files will not be deleted. It is recommended to move them out of the application folder immediately.)
+						</span>
+					</>
+				}
+				isDestructive
+			/>
 			<div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
 				<div className="space-y-2">
 					<h1 className="text-2xl font-semibold">Backup folders</h1>
@@ -357,10 +434,7 @@ export function Folders() {
 									<div className="inline-flex w-fit h-fit items-center gap-1">
 										<Tooltip>
 											<TooltipTrigger asChild>
-												<Button variant="link" className="cursor-pointer" onClick={() => {
-													setSelectedFolder(folder)
-													setMode("grid")
-												}}>
+												<Button variant="link" className="cursor-pointer">
 													{getFolderName(folder)}
 												</Button>
 											</TooltipTrigger>
@@ -370,9 +444,9 @@ export function Folders() {
 										</Tooltip>
 										<Tooltip>
 											<TooltipTrigger asChild>
-												{folder.problem === 0
-													? <CircleCheck className="size-4" />
-													: <CircleX className="size-4 text-destructive" />}
+												{getFolderStatus(folder) == "Synced" ? <CircleCheck className="size-4" />
+													: getFolderStatus(folder) == "Pending" ? <CircleDashed className="size-4" />
+													: <CircleX className="size-4 text-destructive"/>}
 											</TooltipTrigger>
 											<TooltipContent>
 												{getProblemLabel(folder.problem)}
@@ -388,7 +462,18 @@ export function Folders() {
 								<TableCell>
 									{formatDate(folder.lastSync)}
 								</TableCell>
-								<TableCell>{folder.assignedClouds.length}</TableCell>
+								<TableCell>
+									<div>
+										{folder.assignedClouds.length == 0 ? 0
+										: folder.assignedClouds.map((cloud) => {
+											const Icon = PROVIDER_METADATA[cloud.provider].icon
+											const email = accountsByProvider[cloud.provider].find(account => account.id == cloud.accountId)?.email
+											return (<Badge>
+												<Icon/> <span className="truncate">{email}</span>
+											</Badge>)
+										})}
+									</div>
+								</TableCell>
 								<TableCell>
 									<Badge variant="outline">{getProblemLabel(folder.problem)}</Badge>
 								</TableCell>
@@ -403,7 +488,12 @@ export function Folders() {
 											<DropdownMenuContent>
 												<DropdownMenuItem>Edit folder</DropdownMenuItem>
 												<DropdownMenuItem>Rename</DropdownMenuItem>
-												<DropdownMenuItem variant="destructive">Delete</DropdownMenuItem>
+												<DropdownMenuItem 
+													variant="destructive"
+													onClick={() => {handleRemoveFolder(folder.id)}}
+												>
+													Delete
+												</DropdownMenuItem>
 											</DropdownMenuContent>
 										</DropdownMenuPortal>
 									</DropdownMenu>
@@ -423,8 +513,12 @@ export function Folders() {
 										>
 											<Plus className="size-4" /> Add folder
 										</Button>
-										<Button variant="outline" size="sm">
-											<Trash2 className="size-4" /> Remove
+										<Button 
+											variant="outline" 
+											size="sm"
+											onClick={() => handleRemoveFolders(selectedRows)}
+										>
+											<Trash2 className="size-4" /> Remove {selectedRows.length == 1 ? selectedRows.length + " folder" : selectedRows.length > 1 ? selectedRows.length + " folders": ""}
 										</Button>
 									</div>
 								</div>
