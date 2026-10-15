@@ -501,6 +501,15 @@ namespace StorageStandby.Backend.Core
                 .ToList();
         }
 
+        // local-to-cloud force-queue operation (scans selected local folder/file and creates PendingSyncItem records so the normal synchronization pipeline will upload them again)
+        // Note: does NOT immediately synchronize anything itself
+        // 1. Load WatchedFolder
+        // 2. Choose scan root (if localPath is omitted, use folder path)
+            // Root chosen can be a subdirectory of WatchedFolder
+        // 3. Enumerate local paths (all nested files and directories, or a single file)
+        // 4. Remove ignored paths
+        // 5. Load existing active queue items
+        // 6. Update or create queue entries for existing files
         public async Task QueueResyncAsync(
             long watchedFolderId,
             string? localPath = null,
@@ -542,6 +551,12 @@ namespace StorageStandby.Backend.Core
             else if (File.Exists(root))
             {
                 paths.Add((root, false));
+            }
+
+            // if request path is neither directory nor file, an empty path list is produced
+            if (paths.Count == 0)
+            {
+                throw new FileNotFoundException($"{root} is not found");
             }
 
             paths = paths
