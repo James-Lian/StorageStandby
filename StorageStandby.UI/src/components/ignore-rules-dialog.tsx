@@ -11,13 +11,12 @@
 //     open={open}
 //     onOpenChange={setOpen}
 //     rules={ignoreRules}
-//     onRulesChange={setIgnoreRules}   // called with the new ";"-joined string on Apply
+//     onRulesChange={saveIgnoreRules}   // called with the new ";"-joined string on Confirm
 //     basePath="C:/Users/james/Projects" // optional; omit for GLOBAL ignore rules
 //   />
 //
-// When `basePath` is provided (folder-specific rules), a label at the top shows the
-// folder's full path and each relative table row shows a tooltip with its full path.
-// That affordance does not apply when `basePath` is omitted (global ignore rules).
+// When `basePath` is provided, a label at the top shows the folder's full path and
+// each relative table row shows a tooltip with its full path.
 
 import { useState } from "react"
 import {
@@ -52,12 +51,12 @@ export interface IgnoreRulesDialogProps {
     onOpenChange: (open: boolean) => void
     /** Current semicolon-delimited ignore rules (the source of truth). */
     rules: string
-    /** Called with the new semicolon-delimited string when the user clicks Apply. */
-    onRulesChange: (rules: string) => void
+    /** Called with the new semicolon-delimited string when the user clicks Confirm. */
+    onRulesChange: (rules: string) => void | Promise<void>
     /**
      * Optional folder path the rules belong to. When provided, the table paths are
      * treated as relative to this folder (full-path label + tooltips are shown).
-     * Omit for global ignore rules.
+    * Omit when the full path context is not needed.
      */
     basePath?: string
     /** Dialog title. Defaults to "Ignore Rules". */
@@ -77,8 +76,10 @@ export function IgnoreRulesDialog({
 }: IgnoreRulesDialogProps) {
     // Local working copy of the rules (list view). Committed to the caller on Apply.
     const [draft, setDraft] = useState<string[]>([])
+    const [rawRules, setRawRules] = useState("")
     const [newRule, setNewRule] = useState<string>("")
     const [activeTab, setActiveTab] = useState<string>("ui")
+    const [isApplying, setIsApplying] = useState(false)
 
     // "Adjust state while rendering" (https://react.dev/reference/react/useState#storing-information-from-previous-renders):
     // remember the props we've already synced into the draft, and when they change we reset the working
@@ -90,6 +91,7 @@ export function IgnoreRulesDialog({
         setLastSynced({ open, rules })
         if (open) {
             setDraft(splitRules(rules))
+            setRawRules(rules)
             setNewRule("")
             setActiveTab("ui")
         }
@@ -117,9 +119,20 @@ export function IgnoreRulesDialog({
         setNewRule("")
     }
 
-    function applyChanges() {
-        onRulesChange(draft.join(";"))
-        onOpenChange(false)
+    function updateRule(index: number, value: string) {
+        setDraft((prev) => prev.map((rule, ruleIndex) => ruleIndex === index ? value : rule))
+    }
+
+    async function applyChanges() {
+        setIsApplying(true)
+        try {
+            await onRulesChange(draft.join(";"))
+            onOpenChange(false)
+        } catch {
+            // The caller owns error reporting; keep the editor open to preserve the draft.
+        } finally {
+            setIsApplying(false)
+        }
     }
 
     const isFolderSpecific = Boolean(basePath && basePath.trim().length > 0)
@@ -136,7 +149,13 @@ export function IgnoreRulesDialog({
                     </DialogDescription>
                 </DialogHeader>
 
-                <Tabs value={activeTab} onValueChange={setActiveTab}>
+                <Tabs
+                    value={activeTab}
+                    onValueChange={(value) => {
+                        if (value === "raw") setRawRules(draft.join(";"))
+                        setActiveTab(value)
+                    }}
+                >
                     <TabsList>
                         <TabsTrigger value="ui">Visual editor</TabsTrigger>
                         <TabsTrigger value="raw">Raw rules</TabsTrigger>
@@ -173,12 +192,12 @@ export function IgnoreRulesDialog({
                                                     <TableCell className="font-medium">
                                                         <Tooltip>
                                                             <TooltipTrigger asChild>
-                                                                <button
-                                                                    type="button"
-                                                                    className="cursor-help font-mono text-xs underline-offset-2 hover:underline"
-                                                                >
-                                                                    {rule}
-                                                                </button>
+                                                                <Input
+                                                                    value={rule}
+                                                                    onChange={(event) => updateRule(index, event.target.value)}
+                                                                    aria-label={`Edit ignore rule ${index + 1}`}
+                                                                    className="h-8 font-mono text-xs"
+                                                                />
                                                             </TooltipTrigger>
                                                             <TooltipContent side="top">
                                                                 {isFolderSpecific && basePath
@@ -237,8 +256,18 @@ export function IgnoreRulesDialog({
                     <TabsContent value="raw">
                         <Textarea
                             className="min-h-40 font-mono text-xs"
-                            value={draft.join(";")}
-                            onChange={(e) => setDraft(splitRules(e.target.value))}
+                            value={rawRules}
+                            onKeyDown={(event) => {
+                                // prevent newlines
+                                if (event.key === "Enter") {
+                                    event.preventDefault()
+                                }
+                            }}
+                            onChange={(e) => {
+                                const value = e.target.value.replace(/[\r\n]/g, "")
+                                setRawRules(value)
+                                setDraft(splitRules(value))
+                            }}
                             placeholder="*.tmp;node_modules/;.git/"
                         />
                         <p className="mt-1 text-xs text-muted-foreground">Semicolon-delimited ignore rules — one per entry.</p>
@@ -250,12 +279,12 @@ export function IgnoreRulesDialog({
                         Cancel
                     </Button>
                     {activeTab == "ui" ? 
-                        <Button type="button" onClick={applyChanges}>
-                            Ok
+                        <Button type="button" onClick={() => void applyChanges()} disabled={isApplying}>
+                            Confirm
                         </Button>
                     : 
-                        <Button type="button" onClick={applyChanges}>
-                            Apply
+                        <Button type="button" onClick={() => void applyChanges()} disabled={isApplying}>
+                            Confirm
                         </Button>
                     }
                 </DialogFooter>

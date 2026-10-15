@@ -11,12 +11,10 @@ export function splitRules(rules: string): string[] {
         .filter(Boolean)
 }
 
-/** Heuristic path validity used by the UI table. */
+// Heuristic rule validity used by the UI table.
 export function isValidRulePath(rule: string): boolean {
     const trimmed = rule.trim()
     if (trimmed.length === 0) return false
-    // A glob / pattern character means it isn't a literal filesystem path.
-    if (/[*?[\]{}]/.test(trimmed)) return false
     if (trimmed.includes(";")) return false
     return true
 }

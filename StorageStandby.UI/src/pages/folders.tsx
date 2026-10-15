@@ -1,4 +1,4 @@
-import { ArrowDownUp, Ellipsis, Plus, Trash2, CircleCheck, CircleX, CircleDashed } from "lucide-react"
+import { ArrowDownUp, Ellipsis, Plus, Trash2, CircleCheck, CircleDashed } from "lucide-react"
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -39,14 +39,15 @@ import {
 	SelectValue,
 } from "@/components/ui/select"
 import { PROBLEMATIC_FOLDER_TYPE } from "@/types/folders"
-import type { ProviderAccountCloud, WatchedFolder, WatchedFolderCloudMetadata } from "@/types/data"
+import type { WatchedFolder } from "@/types/data"
 import { refreshWatchedFolders, useWatchedFolders } from "@/lib/watched-folders"
 import { notifyError, notifySuccess } from "@/lib/notifications"
 import { readErrorDetails } from "@/lib/read-errors-utils"
 import { PROVIDER_METADATA, type Providers } from "@/types/providers"
 import { useConnectedAccounts } from "@/lib/connected-accounts"
 import { ConfirmationModal } from "@/components/confirmation-dialog"
-import { addFolderCloud, fetchOpenExplorer, removeFolderCloud, resyncFolder } from "@/api/data"
+import { IgnoreRulesDialog } from "@/components/ignore-rules-dialog"
+import { addFolderCloud, fetchOpenExplorer, reconcileFolderIgnoreRules, removeFolderCloud, resyncFolder } from "@/api/data"
 import type { ConnectedAccount } from "@/api/accounts"
 
 
@@ -139,6 +140,7 @@ export function Folders() {
 	// removing folders confirmation dialog
 	const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false)
 	const [pendingDeleteIds, setPendingDeleteIds] = useState<number[]>([])
+	const [ignoreRulesFolder, setIgnoreRulesFolder] = useState<WatchedFolder | null>(null)
 
 	// listens for WebView2 message from native folder picker in useEffect, e.g. {"type": "folder-selected", "path": "C:\example"}
 	// useCallback memoizes the function
@@ -270,6 +272,29 @@ export function Folders() {
 		setIsDeleteDialogOpen(true)
 	}
 
+	const handleIgnoreRulesChange = async (newIgnoreRules: string) => {
+		if (!ignoreRulesFolder) return
+
+		try {
+			await reconcileFolderIgnoreRules(
+				ignoreRulesFolder.id,
+				ignoreRulesFolder.ignoreRules,
+				newIgnoreRules,
+			)
+			await refreshWatchedFolders()
+			notifySuccess({
+				title: "Ignore rules updated",
+				summary: ignoreRulesFolder.localPath ?? "Folder rules saved",
+			})
+		} catch (error) {
+			notifyError({
+				title: "Unable to update ignore rules",
+				summary: error instanceof Error ? error.message : "An unknown error occurred.",
+			})
+			throw error
+		}
+	}
+
 	const confirmRemoval = async () => {
 		try {
 			await Promise.all(
@@ -382,6 +407,16 @@ export function Folders() {
 
 	return (
 		<div className="space-y-6 p-4">
+			<IgnoreRulesDialog
+				open={ignoreRulesFolder !== null}
+				onOpenChange={(open) => {
+					if (!open) setIgnoreRulesFolder(null)
+				}}
+				rules={ignoreRulesFolder?.ignoreRules ?? ""}
+				onRulesChange={handleIgnoreRulesChange}
+				basePath={ignoreRulesFolder?.localPath ?? undefined}
+				title="Folder ignore rules"
+			/>
 			<ConfirmationModal
 				isOpen={isDeleteDialogOpen}
 				onClose={() => {
@@ -498,7 +533,7 @@ export function Folders() {
 							<TableHead>Last synced</TableHead>
 							<TableHead>Clouds</TableHead>
 							<TableHead>Ignore Rules</TableHead>
-							<TableHead>Track Snapshots</TableHead>
+							{/* <TableHead>Track Snapshots</TableHead> */}
 							<TableHead>Problem</TableHead>
 							<TableHead className="text-right"></TableHead>
 						</TableRow>
@@ -569,8 +604,8 @@ export function Folders() {
 										]}
 										onValueChange={(value) => {handleCloudSelectionChange(folder, value)}}
 									>
-										<ComboboxTrigger aria-label={`${folder.assignedClouds.length} assigned cloud accounts`}>
-											<ComboboxValue>{folder.assignedClouds.length}</ComboboxValue>
+										<ComboboxTrigger aria-label={`${folder.assignedClouds.length + folder.userAssignedClouds.length} assigned cloud accounts`}>
+											<ComboboxValue>{folder.assignedClouds.length + folder.userAssignedClouds.length}</ComboboxValue>
 										</ComboboxTrigger>
 										<ComboboxContent>
 											<ComboboxList>
@@ -604,6 +639,14 @@ export function Folders() {
 									</Combobox>
 								</TableCell>
 								<TableCell>
+									<Button
+										variant={"ghost"}
+										onClick={() => {
+												setIgnoreRulesFolder(folder)
+										}}
+									>Open ({folder.ignoreRules.split(";").filter(rule => rule !== "").length} {folder.ignoreRules.split(";").filter(rule => rule !== "").length == 1 ? "rule" : "rules"})</Button>
+								</TableCell>
+								<TableCell>
 									<Badge variant="outline">{getProblemLabel(folder.problem)}</Badge>
 								</TableCell>
 								<TableCell className="text-right">
@@ -623,7 +666,7 @@ export function Folders() {
 												<DropdownMenuItem
 													onClick={() => {resyncFolder(folder.id)}}
 												>
-													Requeue folder for sync
+													Resync folder contents
 													{/* "Resync" */}
 												</DropdownMenuItem>
 												<DropdownMenuItem 

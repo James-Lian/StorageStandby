@@ -1,17 +1,12 @@
 import React, { useEffect, useState } from "react"
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Checkbox } from "@/components/ui/checkbox"
 import { cn } from "@/lib/utils"
-import { Pause, Play, RefreshCw, ShieldAlert, X, Zap } from "lucide-react"
+import { Pause, Play, RefreshCw, X } from "lucide-react"
 import { PROVIDERS, type Providers } from "@/types/providers"
-import { IgnoreRulesDialog } from "@/components/ignore-rules-dialog"
-
-// API
-import { fetchAllWatchedFolders, fetchWatchedFolder } from "@/api/data"
 
 export function Sync() {
 
@@ -22,13 +17,6 @@ export function Sync() {
     // Sync: active governance and settings
 
     const [isPaused, setIsPaused] = useState(false)
-    const [preferredProvider, setPreferredProvider] = useState<string>("none")
-    const [ignoreRules, setIgnoreRules] = useState<string>("*.tmp;node_modules/;.git/")
-    const [isIgnoreRulesDialogOpen, setIsIgnoreRulesDialogOpen] = useState(false)
-
-    const [providerDestinationByFolder, setProviderDestinationByFolder] = React.useState<Record<string, [Providers, string]>>({
-        "example": [PROVIDERS.Google, "accountid"]
-    });
 
     const [selectedRows, setSelectedRows] = useState<string[]>([])
     const [queueRows, setQueueRows] = useState([
@@ -203,12 +191,6 @@ export function Sync() {
                 </Table>
             </div>
 
-            <IgnoreRulesDialog
-                open={isIgnoreRulesDialogOpen}
-                onOpenChange={setIsIgnoreRulesDialogOpen}
-                rules={ignoreRules}
-                onRulesChange={setIgnoreRules}
-            />
         </div>
     )
 }
