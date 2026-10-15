@@ -17,6 +17,7 @@ import {
 import { Folder, LayoutDashboard, Link as LucideLink, RefreshCw, ChartLine, Info, LetterText, FileQuestion, Pause, Play } from "lucide-react"
 import { Link } from 'react-router-dom'
 import { useConnectedAccounts } from "@/lib/connected-accounts"
+import { useWatchedFolders } from "@/lib/watched-folders";
 
 function convertBytesToWrittenForm(amtBytes: number) {
     if (amtBytes > 1000000000) {
@@ -34,13 +35,10 @@ function convertBytesToWrittenForm(amtBytes: number) {
 
 export function AppSidebar() {
     const { counts } = useConnectedAccounts()
+    const { folders } = useWatchedFolders();
     const googleDriveAccounts = counts[0]
     const oneDriveAccounts = counts[1]
     const dropboxAccounts = counts[2]
-
-    let syncActive: boolean = false;
-
-    let amtSynced: number = 0;
 
     return (
             <Sidebar
@@ -64,7 +62,7 @@ export function AppSidebar() {
                                         <Folder /><span>Folders & files</span>
                                     </Link>
                                 </SidebarMenuButton>
-                                <SidebarMenuBadge>{convertBytesToWrittenForm(amtSynced)} synced</SidebarMenuBadge>
+                                <SidebarMenuBadge>{folders.length} {folders.length === 1 ? "folder" : "folders"}</SidebarMenuBadge>
                             </SidebarMenuItem>
                             <SidebarMenuItem>
                                 <SidebarMenuButton asChild>
