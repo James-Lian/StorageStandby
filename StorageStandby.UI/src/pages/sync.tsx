@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react"
+import { useEffect, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
@@ -47,7 +47,7 @@ export function Sync() {
                     "flex flex-col gap-4 rounded-2xl border p-4 md:flex-row md:items-center md:justify-between",
                     isPaused
                         ? "border-rose-500/40 bg-rose-500/10"
-                        : "border-sky-500/40 bg-gradient-to-r from-sky-500/10 via-indigo-500/10 to-violet-500/10"
+                        : "border-sky-500/40 bg-linear-to-r from-sky-500/10 via-indigo-500/10 to-violet-500/10"
                 )}
             >
                 <div className="flex items-center gap-3">
@@ -56,7 +56,7 @@ export function Sync() {
                             "flex size-10 shrink-0 items-center justify-center rounded-xl",
                             isPaused
                                 ? "bg-rose-500/15 text-rose-600"
-                                : "bg-gradient-to-br from-sky-500/20 to-indigo-500/20 text-indigo-600"
+                                : "bg-linear-to-br from-sky-500/20 to-indigo-500/20 text-indigo-600"
                         )}
                     >
                         {isPaused ? <Pause className="size-5" /> : <Play className="size-5" />}
@@ -80,7 +80,7 @@ export function Sync() {
                 <div className="flex flex-wrap items-center gap-2">
                     <Button
                         size="lg"
-                        className="bg-gradient-to-r from-sky-500 to-indigo-500 text-white shadow-md hover:from-sky-600 hover:to-indigo-600"
+                        className="bg-linear-to-r from-sky-500 to-indigo-500 text-white shadow-md hover:from-sky-600 hover:to-indigo-600"
                     >
                         <RefreshCw className="mr-2 size-4" /> Sync All Now
                     </Button>

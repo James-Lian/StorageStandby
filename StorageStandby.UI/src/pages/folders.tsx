@@ -201,11 +201,26 @@ export function Folders() {
 
 	const filteredFolders = useMemo(() => {
 		const normalizedSearch = search.toLowerCase()
-		return folders.filter((folder) =>
+		const matchingFolders = folders.filter((folder) =>
 			getFolderName(folder).toLowerCase().includes(normalizedSearch) ||
 			folder.localPath?.toLowerCase().includes(normalizedSearch)
 		)
-	}, [folders, search]);
+
+		return [...matchingFolders].sort((left, right) => {
+			switch (sortMethod) {
+				case "alphabetical":
+					return getFolderName(left).localeCompare(getFolderName(right))
+				case "syncStatus":
+					return getFolderStatus(left).localeCompare(getFolderStatus(right))
+				case "dateLastSynced":
+					return (right.lastSync ? new Date(right.lastSync).getTime() : 0) -
+						(left.lastSync ? new Date(left.lastSync).getTime() : 0)
+				case "path":
+				default:
+					return (left.localPath ?? "").localeCompare(right.localPath ?? "")
+			}
+		})
+	}, [folders, search, sortMethod]);
 
 	const foldersNeedingAttention = filteredFolders.filter(
 		(folder) => folder.problem !== PROBLEMATIC_FOLDER_TYPE.None,
@@ -491,7 +506,12 @@ export function Folders() {
 						<p className="text-sm text-muted-foreground">{filteredFolders.length} folders across current filter. File counts are not included in the folder API response.</p>
 					</div>
 					<div className="flex flex-row gap-3 items-center">
-						<Select value={sortMethod} onValueChange={setSortMethod}>
+						<Select 
+							value={sortMethod} 
+							onValueChange={(method) => {
+								setSortMethod(method)
+							}}
+						>
 							<SelectTrigger>
 								<ArrowDownUp/>
 								<SelectValue placeholder="Sort your files" />
@@ -502,7 +522,6 @@ export function Folders() {
 									<SelectItem value="alphabetical">Sort alphabetically</SelectItem>
 									<SelectItem value="syncStatus">Sort by sync status</SelectItem>
 									<SelectItem value="dateLastSynced">Sort by date last synced</SelectItem>
-									<SelectItem value="fileSize">Sort by file size</SelectItem>
 								</SelectGroup>
 							</SelectContent>
 						</Select>
