@@ -44,6 +44,8 @@ namespace StorageStandby.Backend.Core
 
             var alteredFoldersIds = await db.PendingSyncQueue
                 .Select(i => i.WatchedFolderId)
+                .Union(db.WatchedFolderUserCloudAssignments
+                    .Select(cloud => cloud.WatchedFolderId))
                 .Union(db.WatchedFolderCloudMetadata
                     .Where(cloud => cloud.State == CloudAssignmentState.PendingBootstrap
                         || cloud.State == CloudAssignmentState.Failed)
@@ -61,6 +63,7 @@ namespace StorageStandby.Backend.Core
 
                 var watchedFolder = await db.WatchedFolders
                     .Include(folder => folder.AssignedClouds)
+                    .Include(folder => folder.UserAssignedClouds)
                     .SingleOrDefaultAsync(folder => folder.Id == id, cancellationToken);
                 if (watchedFolder is null || string.IsNullOrWhiteSpace(watchedFolder.LocalPath))
                 {
@@ -92,9 +95,22 @@ namespace StorageStandby.Backend.Core
                 {
                     cancellationToken.ThrowIfCancellationRequested();
 
-                    var metadata = watchedFolder.AssignedClouds.Single(cloud =>
+                    var metadata = watchedFolder.AssignedClouds.SingleOrDefault(cloud =>
                         cloud.Provider == destination.Provider
-                        && cloud.AccountId == destination.AccountId);
+                        && string.Equals(cloud.AccountId, destination.AccountId, StringComparison.OrdinalIgnoreCase));
+                    if (metadata is null)
+                    {
+                        metadata = new WatchedFolderCloudMetadata
+                        {
+                            Provider = destination.Provider,
+                            AccountId = destination.AccountId,
+                            WatchedFolderId = watchedFolder.Id,
+                            State = CloudAssignmentState.PendingBootstrap
+                        };
+                        watchedFolder.AssignedClouds.Add(metadata);
+                        db.WatchedFolderCloudMetadata.Add(metadata);
+                        await db.SaveChangesAsync(cancellationToken);
+                    }
                     bool isBootstrap = metadata.State != CloudAssignmentState.Active;
                     List<PendingSyncItem> destinationQueue = isBootstrap
                         ? BuildBootstrapQueue(watchedFolder)
@@ -141,7 +157,7 @@ namespace StorageStandby.Backend.Core
                         {
                             Providers.Google => await ExecuteGoogleSyncAsync(
                                 syncEvent,
-                                queue,
+                                destinationQueue,
                                 destination.AccountId,
                                 cancellationToken),
                             Providers.Microsoft => await ExecuteMicrosoftSyncAsync(
@@ -164,6 +180,15 @@ namespace StorageStandby.Backend.Core
                         if (result.Status == SyncEventType.Succeeded)
                         {
                             metadata.State = CloudAssignmentState.Active;
+                            var completedAssignments = watchedFolder.UserAssignedClouds.Where(item =>
+                                item.WatchedFolderId == id
+                                && item.Provider == destination.Provider
+                                && string.Equals(
+                                    item.AccountId,
+                                    destination.AccountId,
+                                    StringComparison.OrdinalIgnoreCase))
+                                .ToList();
+                            db.WatchedFolderUserCloudAssignments.RemoveRange(completedAssignments);
                             if (!isBootstrap)
                             {
                                 foreach (var item in destinationQueue)
@@ -456,13 +481,23 @@ namespace StorageStandby.Backend.Core
             ArgumentNullException.ThrowIfNull(folder);
             await Task.CompletedTask;
             return folder.AssignedClouds
-                .Where(cloud => !string.IsNullOrWhiteSpace(cloud.AccountId))
+                .Where(cloud => cloud.State != CloudAssignmentState.Removing
+                    && cloud.State != CloudAssignmentState.Unlinked
+                    && !string.IsNullOrWhiteSpace(cloud.AccountId))
                 .Select(cloud => new ProviderAccountCloud
                 {
                     Provider = cloud.Provider,
                     AccountId = cloud.AccountId
                 })
-                .DistinctBy(cloud => (cloud.Provider, cloud.AccountId))
+                .Concat(folder.UserAssignedClouds
+                    .Where(cloud => !string.IsNullOrWhiteSpace(cloud.AccountId))
+                    .Select(cloud => new ProviderAccountCloud
+                    {
+                        Provider = cloud.Provider,
+                        AccountId = cloud.AccountId
+                    }))
+                .GroupBy(cloud => (cloud.Provider, AccountId: cloud.AccountId.ToUpperInvariant()))
+                .Select(group => group.First())
                 .ToList();
         }
 
@@ -641,8 +676,7 @@ namespace StorageStandby.Backend.Core
             return TimeSpan.FromMinutes(Math.Max(1, settings.AutomaticSyncIntervalMinutes));
         }
 
-        // 1. Remove from AssignedClouds
-        // 2. Delete the WatchedFolder folder from the remote location
+        // Remove a pending request or an established assignment.
         public async Task RemoveFromAssignedCloud(
             WatchedFolder folder,
             Providers provider,
@@ -661,8 +695,20 @@ namespace StorageStandby.Backend.Core
                     && cloud.AccountId == accountId,
                     cancellationToken);
 
+            var requestedAssignment = await db.WatchedFolderUserCloudAssignments
+                .SingleOrDefaultAsync(item =>
+                    item.WatchedFolderId == folder.Id
+                    && item.Provider == provider
+                    && item.AccountId == accountId,
+                    cancellationToken);
+            if (requestedAssignment is not null)
+            {
+                db.WatchedFolderUserCloudAssignments.Remove(requestedAssignment);
+            }
+
             if (cloudMetadataToRemove is null)
             {
+                await db.SaveChangesAsync(cancellationToken);
                 return;
             }
 
@@ -695,8 +741,8 @@ namespace StorageStandby.Backend.Core
                 cloud.Provider == provider && cloud.AccountId == accountId);
         }
 
-        // 1. Add to AssignedClouds
-        public async Task AddToAssignedCloud(
+        // Add a durable user request. The assignment is promoted after bootstrap succeeds.
+        public async Task AddToUserAssignedCloud(
             WatchedFolder folder,
             Providers provider,
             string accountId,
@@ -716,6 +762,7 @@ namespace StorageStandby.Backend.Core
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
             var persistedFolder = await db.WatchedFolders
                 .Include(watchedFolder => watchedFolder.AssignedClouds)
+                .Include(watchedFolder => watchedFolder.UserAssignedClouds)
                 .SingleOrDefaultAsync(watchedFolder => watchedFolder.Id == folder.Id, cancellationToken);
 
             if (persistedFolder is null)
@@ -730,27 +777,18 @@ namespace StorageStandby.Backend.Core
                 return;
             }
 
-            var cloudMetadata = new WatchedFolderCloudMetadata
+            if (!persistedFolder.UserAssignedClouds.Any(cloud =>
+                    cloud.Provider == provider
+                    && string.Equals(cloud.AccountId, accountId, StringComparison.OrdinalIgnoreCase)))
             {
-                Provider = provider,
-                AccountId = accountId,
-                WatchedFolderId = persistedFolder.Id,
-                RemoteFolderId = string.Empty,
-                ConfigFileId = string.Empty
-            };
-
-            persistedFolder.AssignedClouds.Add(cloudMetadata);
-            await db.SaveChangesAsync(cancellationToken);
-
-            folder.AssignedClouds.Add(new WatchedFolderCloudMetadata
-            {
-                Provider = cloudMetadata.Provider,
-                AccountId = cloudMetadata.AccountId,
-                RemoteFolderId = cloudMetadata.RemoteFolderId,
-                ConfigFileId = cloudMetadata.ConfigFileId,
-                WatchedFolderId = folder.Id,
-                State = cloudMetadata.State,
-            });
+                persistedFolder.UserAssignedClouds.Add(new WatchedFolderUserCloudAssignment
+                {
+                    Provider = provider,
+                    AccountId = accountId,
+                    WatchedFolderId = persistedFolder.Id
+                });
+                await db.SaveChangesAsync(cancellationToken);
+            }
         }
     }
 }

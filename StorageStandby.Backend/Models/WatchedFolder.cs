@@ -1,4 +1,4 @@
-﻿using System.ComponentModel.DataAnnotations.Schema;
+using System.ComponentModel.DataAnnotations.Schema;
 
 namespace StorageStandby.Backend.Models
 {
@@ -36,9 +36,8 @@ namespace StorageStandby.Backend.Models
 
         // ---------------------------------------------------------------
         // Cloud/Provider Information
-        public List<WatchedFolderCloudMetadata> AssignedClouds { get; private set; } = []; // <-- clouds where information has actually been uploaded
-        [NotMapped]
-        public List<ProviderAccountCloud> UserAssignedClouds { get; private set; } = [];
+        public List<WatchedFolderCloudMetadata> AssignedClouds { get; private set; } = [];
+        public List<WatchedFolderUserCloudAssignment> UserAssignedClouds { get; private set; } = [];
 
         // ---------------------------------------------------------------
         // Folder/File specific settings
@@ -59,10 +58,18 @@ namespace StorageStandby.Backend.Models
         // User assignments
         public void AddUserCloudAssignment(Providers provider, string accountId)
         {
-            UserAssignedClouds.Add(new ProviderAccountCloud
+            if (UserAssignedClouds.Any(cloud =>
+                    cloud.Provider == provider
+                    && string.Equals(cloud.AccountId, accountId, StringComparison.OrdinalIgnoreCase)))
             {
-                Provider=provider,
-                AccountId=accountId
+                return;
+            }
+
+            UserAssignedClouds.Add(new WatchedFolderUserCloudAssignment
+            {
+                Provider = provider,
+                AccountId = accountId,
+                WatchedFolderId = Id
             });
         }
 
@@ -70,10 +77,7 @@ namespace StorageStandby.Backend.Models
         {
             UserAssignedClouds.RemoveAll(i =>
                 i.Provider == cloud.Provider &&
-                i.AccountId == cloud.AccountId);
-            AssignedClouds.RemoveAll(i => 
-                i.Provider == cloud.Provider && 
-                i.AccountId == cloud.AccountId);
+                string.Equals(i.AccountId, cloud.AccountId, StringComparison.OrdinalIgnoreCase));
         }
 
         // tie the local folder with a cloud location
@@ -121,50 +125,11 @@ namespace StorageStandby.Backend.Models
         Unlinked = 5
     }
 
-    public enum FileSyncAction
+    public class WatchedFolderUserCloudAssignment
     {
-        Created,
-        Deleted,
-        Renamed,
-        Changed,
-        Moved
-    }
-
-    public class FileSyncRecord
-    {
-        // -----------------------------------------------------------
-        // Identifiers
         public long Id { get; set; }
         public long WatchedFolderId { get; set; }
-
-        // -----------------------------------------------------------
-        // Props
-
-        // validity checks cause file could be changed
-        public string LocalPath { get; set; } = string.Empty;
-        // validity checks cause file could be changed/deleted
-        public string CloudId { get; set; } = string.Empty;
-
-        public DateTime LastModifiedLocal { get; set; }
-        public DateTime LastSyncedToCloud { get; set; }
-    }
-
-    public enum FolderSyncAction
-    {
-        Rename = 0,
-        Delete = 1,
-        Move = 2
-    }
-    public class FolderSyncRecord
-    {
-        public long Id { get; set; } 
-        public long WatchedFolderId { get; set; }
-
-        public string LocalPath { get; set; } = string.Empty;
-        public string CloudFolderId { get; set; } = string.Empty;
-
-        public FolderSyncAction SyncAction { get; set; }
-
-        public DateTime LastSyncedToCloud { get; set; }
+        public Providers Provider { get; set; }
+        public string AccountId { get; set; } = string.Empty;
     }
 }
