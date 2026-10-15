@@ -5,16 +5,16 @@ namespace StorageStandby.Backend.Models
     public enum SyncIncrements
     {
         Inactive = 0,
-        Hourly = 1,
-        Daily = 2,
-        Weekly = 3,
-        Monthly = 4,
-        Yearly = 5
+        Daily = 1,
+        Weekly = 2,
+        Monthly = 3,
     }
     public class SyncFrequency
     {
         // Weekly; Monthly; Yearly; dropdown
         public int Multiplier = 1; 
+        public List<int>? Identifiers = []; // e.g. Day 1, 2, 3 of the week/month, doesn't apply for daily
+        // TODO: for month, if one of the identifiers is greater than the maximum number of days in the month (e.g. 31 in february), check for that
         public SyncIncrements SyncIncrements = SyncIncrements.Weekly;
     }
 

@@ -14,7 +14,7 @@ import {
   SidebarMenuSub,
 } from "@/components/ui/sidebar"
 
-import { Folder, LayoutDashboard, Link as LucideLink, RefreshCw, ChartLine, Info, LetterText, FileQuestion, Pause, Play } from "lucide-react"
+import { Folder, LayoutDashboard, Link as LucideLink, RefreshCw, ChartLine, Info, FileQuestion } from "lucide-react"
 import { Link } from 'react-router-dom'
 import { useConnectedAccounts } from "@/lib/connected-accounts"
 import { useWatchedFolders } from "@/lib/watched-folders";
