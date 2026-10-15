@@ -12,6 +12,8 @@ namespace StorageStandby.Backend.Core
         readonly LocalFileSystemService _fileSystem;
         readonly TokenManager _tokenManager;
         readonly BackupEngineState _state;
+        readonly object _activeSyncLock = new();
+        CancellationTokenSource? _activeSyncCancellation;
         public SynchronizationService(
             IServiceScopeFactory scopeFactory,
             WatchedFolderService watchedFolderService,
@@ -29,13 +31,68 @@ namespace StorageStandby.Backend.Core
         // ----------------------------------------------------------------------------------------------------
         // Sync & Queue Methods
 
-        public async Task ExecuteSyncQueue(CancellationToken cancellationToken = default)
+        // main logic method with sync cancellation logic
+        public async Task ExecuteSyncQueue(
+            CancellationToken cancellationToken = default,
+            long? watchedFolderId = null,
+            Providers? provider = null,
+            string? accountId = null,
+            long? syncEventId = null)
         {
             using var executionLease = await _state.AcquireSyncExecutionAsync(cancellationToken);
-            await ExecuteSyncQueueCore(cancellationToken);
+            using var activeCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            lock (_activeSyncLock)
+            {
+                _activeSyncCancellation = activeCancellation;
+            }
+
+            try
+            {
+                await ExecuteSyncQueueCore(
+                    activeCancellation.Token,
+                    watchedFolderId,
+                    provider,
+                    accountId,
+                    syncEventId);
+            }
+            catch (OperationCanceledException) when (
+                activeCancellation.IsCancellationRequested
+                && !cancellationToken.IsCancellationRequested)
+            {
+                // A user-paused run has already persisted its interrupted event.
+            }
+            finally
+            {
+                lock (_activeSyncLock)
+                {
+                    if (ReferenceEquals(_activeSyncCancellation, activeCancellation))
+                    {
+                        _activeSyncCancellation = null;
+                    }
+                }
+            }
         }
 
-        private async Task ExecuteSyncQueueCore(CancellationToken cancellationToken)
+        public bool PauseCurrentSync()
+        {
+            lock (_activeSyncLock)
+            {
+                if (_activeSyncCancellation is null)
+                {
+                    return false;
+                }
+
+                _activeSyncCancellation.Cancel();
+                return true;
+            }
+        }
+
+        private async Task ExecuteSyncQueueCore(
+            CancellationToken cancellationToken,
+            long? watchedFolderId = null,
+            Providers? provider = null,
+            string? accountId = null,
+            long? syncEventId = null)
         {
             // 1. Build list of altered WatchedFolders
 
@@ -52,6 +109,25 @@ namespace StorageStandby.Backend.Core
                     .Select(cloud => cloud.WatchedFolderId))
                 .Distinct()
                 .ToListAsync(cancellationToken);
+
+            if (watchedFolderId.HasValue)
+            {
+                alteredFoldersIds = alteredFoldersIds
+                    .Where(id => id == watchedFolderId.Value)
+                    .ToList();
+            }
+
+            if (syncEventId.HasValue)
+            {
+                var eventFolderId = await db.SyncEvents
+                    .Where(item => item.Id == syncEventId.Value)
+                    .Select(item => (long?)item.WatchedFolderId)
+                    .SingleOrDefaultAsync(cancellationToken);
+                if (eventFolderId.HasValue && !alteredFoldersIds.Contains(eventFolderId.Value))
+                {
+                    alteredFoldersIds.Add(eventFolderId.Value);
+                }
+            }
 
             // 2. Iterate through them: choose a provider and an account, perform upload
             // |--> 1 SyncEvent per folder-provider-account combo
@@ -95,6 +171,13 @@ namespace StorageStandby.Backend.Core
                 {
                     cancellationToken.ThrowIfCancellationRequested();
 
+                    if (provider.HasValue && destination.Provider != provider.Value
+                        || accountId is not null
+                        && !string.Equals(destination.AccountId, accountId, StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
                     var metadata = watchedFolder.AssignedClouds.SingleOrDefault(cloud =>
                         cloud.Provider == destination.Provider
                         && string.Equals(cloud.AccountId, destination.AccountId, StringComparison.OrdinalIgnoreCase));
@@ -131,14 +214,31 @@ namespace StorageStandby.Backend.Core
                         : CloudAssignmentState.Active;
                     metadata.LastError = null;
 
-                    var syncEvent = new SyncEvent
+                    SyncEvent? syncEvent = syncEventId.HasValue
+                        ? await db.SyncEvents.SingleOrDefaultAsync(
+                            item => item.Id == syncEventId.Value
+                                && item.WatchedFolderId == id
+                                && item.Provider == destination.Provider
+                                && item.AccountId == destination.AccountId,
+                            cancellationToken)
+                        : null;
+                    if (syncEventId.HasValue && syncEvent is null)
+                    {
+                        continue;
+                    }
+
+                    syncEvent ??= new SyncEvent
                     {
                         WatchedFolderId = id,
                         Provider = destination.Provider,
                         AccountId = destination.AccountId,
+                        ScheduledTimestamp = DateTime.UtcNow,
                         CompletionType = SyncEventType.Upcoming
                     };
-                    db.SyncEvents.Add(syncEvent);
+                    if (syncEvent.Id == 0)
+                    {
+                        db.SyncEvents.Add(syncEvent);
+                    }
                     await db.SaveChangesAsync(cancellationToken);
 
                     try
@@ -241,6 +341,9 @@ namespace StorageStandby.Backend.Core
                         cloud.State == CloudAssignmentState.Active))
                 {
                     watchedFolder.LastSync = DateTime.UtcNow;
+                    watchedFolder.NextSyncAt = GetNextSyncAt(
+                        DateTime.UtcNow,
+                        watchedFolder.SyncFrequency);
                     await db.SaveChangesAsync(cancellationToken);
                 }
             }
@@ -695,18 +798,185 @@ namespace StorageStandby.Backend.Core
                 .ToListAsync(cancellationToken);
         }
 
-        public async Task<TimeSpan?> GetAutomaticSyncIntervalAsync(
+        public async Task ExecuteDueAutomaticSyncs(
             CancellationToken cancellationToken = default)
         {
             await using var scope = _scopeFactory.CreateAsyncScope();
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
             var settings = await db.SystemSettings.SingleOrDefaultAsync(cancellationToken);
-            if (settings is null || !settings.AutomaticSyncs)
+            if (settings is null
+                || !settings.AutomaticSyncs
+                || settings.IsSyncPaused
+                && (!settings.PauseSyncUntil.HasValue || settings.PauseSyncUntil > DateTime.UtcNow))
+            {
+                return;
+            }
+
+            DateTime now = DateTime.UtcNow;
+            var dueFolders = (await db.WatchedFolders
+                .Where(folder => folder.NextSyncAt == null || folder.NextSyncAt <= now)
+                .ToListAsync(cancellationToken))
+                .Where(folder => folder.SyncFrequency.SyncIncrements != SyncIncrements.Inactive)
+                .ToList();
+            var foldersToRun = new List<WatchedFolder>();
+
+            foreach (var folder in dueFolders)
+            {
+                folder.NextSyncAt = GetNextSyncAt(now, folder.SyncFrequency);
+                if (folder.SyncsToSkip > 0)
+                {
+                    folder.SyncsToSkip--;
+                    continue;
+                }
+
+                foldersToRun.Add(folder);
+            }
+
+            await db.SaveChangesAsync(cancellationToken);
+            foreach (var folder in foldersToRun)
+            {
+                await ExecuteSyncQueue(cancellationToken, folder.Id);
+            }
+        }
+
+        public async Task SkipSyncEvent(
+            long syncEventId,
+            int additionalSyncsToSkip,
+            CancellationToken cancellationToken = default)
+        {
+            if (additionalSyncsToSkip < 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(additionalSyncsToSkip));
+            }
+
+            await using var scope = _scopeFactory.CreateAsyncScope();
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var syncEvent = await db.SyncEvents
+                .SingleOrDefaultAsync(item => item.Id == syncEventId, cancellationToken)
+                ?? throw new InvalidOperationException($"Sync event does not exist: {syncEventId}");
+            if (syncEvent.CompletionType is not (SyncEventType.Upcoming or SyncEventType.Paused))
+            {
+                throw new InvalidOperationException("Only upcoming or paused sync events can be skipped.");
+            }
+
+            syncEvent.CompletionType = SyncEventType.Skipped;
+            syncEvent.CompletedTimestamp = DateTime.UtcNow;
+            var folder = await db.WatchedFolders
+                .SingleAsync(item => item.Id == syncEvent.WatchedFolderId, cancellationToken);
+            folder.SyncsToSkip += additionalSyncsToSkip;
+            folder.NextSyncAt = GetNextSyncAt(DateTime.UtcNow, folder.SyncFrequency);
+            await db.SaveChangesAsync(cancellationToken);
+        }
+
+        public async Task PostponeSyncEvent(
+            long syncEventId,
+            DateTime scheduledTimestamp,
+            CancellationToken cancellationToken = default)
+        {
+            await using var scope = _scopeFactory.CreateAsyncScope();
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var syncEvent = await db.SyncEvents
+                .SingleOrDefaultAsync(item => item.Id == syncEventId, cancellationToken)
+                ?? throw new InvalidOperationException($"Sync event does not exist: {syncEventId}");
+            if (syncEvent.CompletionType is not (SyncEventType.Upcoming or SyncEventType.Paused))
+            {
+                throw new InvalidOperationException("Only upcoming or paused sync events can be postponed.");
+            }
+
+            syncEvent.ScheduledTimestamp = scheduledTimestamp.ToUniversalTime();
+            syncEvent.CompletionType = SyncEventType.Paused;
+            await db.SaveChangesAsync(cancellationToken);
+        }
+
+        public async Task ResumeSyncEvent(
+            long syncEventId,
+            CancellationToken cancellationToken = default)
+        {
+            await using var scope = _scopeFactory.CreateAsyncScope();
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var syncEvent = await db.SyncEvents
+                .SingleOrDefaultAsync(item => item.Id == syncEventId, cancellationToken)
+                ?? throw new InvalidOperationException($"Sync event does not exist: {syncEventId}");
+            if (syncEvent.CompletionType != SyncEventType.Paused)
+            {
+                throw new InvalidOperationException("Only paused sync events can be resumed.");
+            }
+
+            syncEvent.CompletionType = SyncEventType.Upcoming;
+            syncEvent.ScheduledTimestamp = DateTime.UtcNow;
+            await db.SaveChangesAsync(cancellationToken);
+        }
+
+        private static DateTime? GetNextSyncAt(DateTime fromUtc, SyncFrequency frequency)
+        {
+            if (frequency.SyncIncrements == SyncIncrements.Inactive || frequency.Multiplier < 1)
             {
                 return null;
             }
 
-            return TimeSpan.FromMinutes(Math.Max(1, settings.AutomaticSyncIntervalMinutes));
+            int multiplier = Math.Max(1, frequency.Multiplier);
+            return frequency.SyncIncrements switch
+            {
+                SyncIncrements.Daily => fromUtc.AddDays(multiplier),
+                SyncIncrements.Weekly => GetNextWeeklyOccurrence(fromUtc, frequency, multiplier),
+                SyncIncrements.Monthly => GetNextMonthlyOccurrence(fromUtc, frequency, multiplier),
+                _ => null
+            };
+        }
+
+        private static DateTime GetNextWeeklyOccurrence(
+            DateTime fromUtc,
+            SyncFrequency frequency,
+            int multiplier)
+        {
+            var identifiers = frequency.Identifiers
+                .Where(day => day >= 0 && day <= 6)
+                .Distinct()
+                .OrderBy(day => day)
+                .ToList();
+            if (identifiers.Count == 0)
+            {
+                return fromUtc.AddDays(7 * multiplier);
+            }
+
+            for (int dayOffset = 1; dayOffset <= 7 * multiplier; dayOffset++)
+            {
+                var candidate = fromUtc.AddDays(dayOffset);
+                if (identifiers.Contains((int)candidate.DayOfWeek))
+                {
+                    return candidate;
+                }
+            }
+
+            return fromUtc.AddDays(7 * multiplier);
+        }
+
+        private static DateTime GetNextMonthlyOccurrence(
+            DateTime fromUtc,
+            SyncFrequency frequency,
+            int multiplier)
+        {
+            int year = fromUtc.Year;
+            int month = fromUtc.Month;
+            for (int monthOffset = 0; monthOffset <= 120; monthOffset++)
+            {
+                var candidateMonth = new DateTime(year, month, 1).AddMonths(monthOffset * multiplier);
+                foreach (int day in frequency.Identifiers.Distinct().OrderBy(day => day))
+                {
+                    if (day < 1 || day > DateTime.DaysInMonth(candidateMonth.Year, candidateMonth.Month))
+                    {
+                        continue;
+                    }
+
+                    var candidate = candidateMonth.AddDays(day - 1).Add(fromUtc.TimeOfDay);
+                    if (candidate > fromUtc)
+                    {
+                        return candidate;
+                    }
+                }
+            }
+
+            return fromUtc.AddMonths(multiplier);
         }
 
         // Remove a pending request or an established assignment.

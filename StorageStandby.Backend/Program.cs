@@ -183,12 +183,70 @@ app.MapPost("/api/sync/pause", (bool pauseState, BackupEngineState state) =>
     return Results.Ok(new { Paused = state.GetSyncPause() });
 });
 
+// Stop the currently running provider operation without changing automatic scheduling.
+app.MapPost("/api/sync/current/pause", (SynchronizationService synchronizationService) =>
+{
+    bool paused = synchronizationService.PauseCurrentSync();
+    return Results.Ok(new { Paused = paused });
+});
+
+// Sync all now
 app.MapPost("/api/sync/trigger", async (
     SynchronizationService synchronizationService,
     CancellationToken cancellationToken) =>
 {
     await synchronizationService.ExecuteSyncQueue(cancellationToken);
     return Results.Ok(new { Message = "Sync completed or recorded unfinished work." });
+});
+
+// Sync a SyncEvent now
+app.MapPost("/api/syncevents/{syncEventId:long}/sync-now", async (
+    long syncEventId,
+    SynchronizationService synchronizationService,
+    CancellationToken cancellationToken) =>
+{
+    await synchronizationService.ExecuteSyncQueue(
+        cancellationToken,
+        syncEventId: syncEventId);
+    return Results.Ok(new { Message = "Sync event executed." });
+});
+
+// Skip a SyncEvent
+app.MapPost("/api/syncevents/{syncEventId:long}/skip", async (
+    long syncEventId,
+    SkipSyncRequest request,
+    SynchronizationService synchronizationService,
+    CancellationToken cancellationToken) =>
+{
+    await synchronizationService.SkipSyncEvent(
+        syncEventId,
+        request.AdditionalSyncsToSkip,
+        cancellationToken);
+    return Results.Ok(new { Message = "Sync event skipped." });
+});
+
+// Postpone a SyncEvent until later
+app.MapPost("/api/syncevents/{syncEventId:long}/postpone", async (
+    long syncEventId,
+    PostponeSyncRequest request,
+    SynchronizationService synchronizationService,
+    CancellationToken cancellationToken) =>
+{
+    await synchronizationService.PostponeSyncEvent(
+        syncEventId,
+        request.ScheduledTimestamp,
+        cancellationToken);
+    return Results.Ok(new { Message = "Sync event postponed." });
+});
+
+// Resume SyncEvent
+app.MapPost("/api/syncevents/{syncEventId:long}/resume", async (
+    long syncEventId,
+    SynchronizationService synchronizationService,
+    CancellationToken cancellationToken) =>
+{
+    await synchronizationService.ResumeSyncEvent(syncEventId, cancellationToken);
+    return Results.Ok(new { Message = "Sync event resumed." });
 });
 
 // -------------------------------------------------------------------
@@ -606,6 +664,8 @@ await app.RunAsync();
 
 public record IgnoreRulesChangeRequest(string OldIgnoreRules, string NewIgnoreRules);
 public record OpenExplorerRequest(string LocalPath);
+public record SkipSyncRequest(int AdditionalSyncsToSkip = 0);
+public record PostponeSyncRequest(DateTime ScheduledTimestamp);
 
 public class RevokeReq
 {

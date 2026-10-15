@@ -1,5 +1,6 @@
 ﻿using Microsoft.EntityFrameworkCore; // EF Core - allows C# developers to work with databases instead of manually writing SQL
 using StorageStandby.Backend.Models;
+using System.Text.Json;
 using System;
 using System.IO;
 
@@ -31,6 +32,14 @@ namespace StorageStandby.Backend.Data
 
             modelBuilder.Entity<SystemSettings>()
                 .HasData(new SystemSettings { Id = 1 }); // ensure only one row will always be created
+
+            modelBuilder.Entity<WatchedFolder>()
+                .Property(folder => folder.SyncFrequency)
+                .HasConversion(
+                    value => JsonSerializer.Serialize(value, (JsonSerializerOptions?)null),
+                    value => JsonSerializer.Deserialize<SyncFrequency>(value, (JsonSerializerOptions?)null)
+                        ?? new SyncFrequency())
+                .HasColumnType("TEXT");
             // Configure CloudToken to use composite primary key on (ProviderName, AccountId)
             modelBuilder.Entity<CloudToken>()
                 .HasKey(ct => new { ct.Provider, ct.AccountId });
