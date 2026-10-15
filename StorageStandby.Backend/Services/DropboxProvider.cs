@@ -403,7 +403,7 @@ namespace StorageStandby.Backend.Services
         {
             string clientId = _configuration["DropboxOAuth:AppKey"]
                 ?? throw new InvalidOperationException("Dropbox client ID not configured.");
-            int port = ListenerPortHelper.GetAvailablePort(5431);
+            int port = 5348;
             string redirectUri = $"http://localhost:{port}/callback";
             string state = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
             var pkceFlow = new PKCEOAuthFlow();
