@@ -28,7 +28,6 @@ namespace StorageStandby.Backend.Models
     }
 
     // only the roots are selected by the user + ignore rules
-    // TODO: FileSystemWatcher events don't fire for root folder renames OR deletions (need to watch IT'S parent instead)
     public class WatchedFolder
     {
         public long Id { get; set; }
