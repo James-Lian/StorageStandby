@@ -6,7 +6,6 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Checkbox } from "@/components/ui/checkbox"
 import { cn } from "@/lib/utils"
 import { Pause, Play, RefreshCw, X } from "lucide-react"
-import { PROVIDERS, type Providers } from "@/types/providers"
 
 export function Sync() {
 

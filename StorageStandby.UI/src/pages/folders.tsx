@@ -207,7 +207,9 @@ export function Folders() {
 		)
 	}, [folders, search]);
 
-	const totalFiles = "Not provided by API";
+	const foldersNeedingAttention = filteredFolders.filter(
+		(folder) => folder.problem !== PROBLEMATIC_FOLDER_TYPE.None,
+	).length
 
 	const tagOptions = ["Healthy", "Path not found", "Too large", "Too many files", "Issue"];
 
@@ -471,8 +473,8 @@ export function Folders() {
 					<p className="text-xl font-semibold">{filteredFolders.length}</p>
 				</div>
 				<div className="rounded-2xl border border-border bg-background p-4">
-					<p className="text-sm text-muted-foreground">File count</p>
-					<p className="text-xl font-semibold">{totalFiles}</p>
+					<p className="text-sm text-muted-foreground">Needs attention</p>
+					<p className="text-xl font-semibold">{foldersNeedingAttention}</p>
 				</div>
 			</div>
 

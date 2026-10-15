@@ -13,6 +13,7 @@ import { Toaster } from './components/ui/sonner'
 import { logError } from './lib/notifications'
 import { NotificationCenter } from './components/notification-center'
 import { refreshConnectedAccounts } from './lib/connected-accounts'
+import { refreshWatchedFolders } from './lib/watched-folders'
 
 
 // Interesting shadcn/ui features
@@ -38,20 +39,10 @@ import { refreshConnectedAccounts } from './lib/connected-accounts'
 // Windows toast notification system
 
 function App() {
-	const hasLoggedStartupTest = useRef(false)
 
 	useEffect(() => {
-		if (hasLoggedStartupTest.current) return
-		hasLoggedStartupTest.current = true
-
-		logError({
-			title: 'Startup test error',
-			statusCode: 500,
-			summary: 'This is a test error emitted when the app starts.',
-			details: { source: 'startup-test' },
-		})
-
 		void refreshConnectedAccounts()
+		void refreshWatchedFolders()
 	}, [])
 
 	return (
