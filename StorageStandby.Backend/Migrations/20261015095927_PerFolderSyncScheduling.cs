@@ -33,26 +33,12 @@ namespace StorageStandby.Backend.Migrations
                 type: "TEXT",
                 nullable: true);
 
-            migrationBuilder.RenameColumn(
-                name: "SyncFrequency",
-                table: "WatchedFolders",
-                newName: "LegacySyncFrequency");
-
             migrationBuilder.AddColumn<string>(
                 name: "SyncFrequency",
                 table: "WatchedFolders",
                 type: "TEXT",
                 nullable: false,
                 defaultValue: "{\"Multiplier\":1,\"Identifiers\":[],\"SyncIncrements\":2}");
-
-            migrationBuilder.Sql(
-                "UPDATE WatchedFolders "
-                + "SET SyncFrequency = '{\"Multiplier\":1,\"Identifiers\":[],\"SyncIncrements\":' "
-                + "|| LegacySyncFrequency || '}'");
-
-            migrationBuilder.DropColumn(
-                name: "LegacySyncFrequency",
-                table: "WatchedFolders");
 
             migrationBuilder.AddColumn<int>(
                 name: "SyncsToSkip",
