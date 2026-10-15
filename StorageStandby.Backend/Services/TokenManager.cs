@@ -219,8 +219,8 @@ public class TokenManager
         string tokenEndpoint = ProviderMetadata.TokenEndpoints[provider];
         if (provider == Providers.Microsoft)
         {
-            string tenant = _config["MicrosoftOAuth:TenantID"] ?? "common";
-            tokenEndpoint = $"https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token";
+            tokenEndpoint =
+                "https://login.microsoftonline.com/consumers/oauth2/v2.0/token";
         }
 
         var response = await httpClient.PostAsync(tokenEndpoint, requestBody);

@@ -521,30 +521,32 @@ namespace StorageStandby.Backend.Services
 
         public async Task<AuthResult> StartOAuthAsync()
         {
-            string clientId = Uri.EscapeDataString(
+            string clientId =
                 _configuration["MicrosoftOAuth:ClientID"]
-                ?? throw new InvalidOperationException("Microsoft client ID not configured."));
-            string tenant = _configuration["MicrosoftOAuth:TenantID"] ?? "common";
-            int port = GetAvailablePort(5432);
-            string redirectUri = Uri.EscapeDataString($"http://localhost:{port}/callback/");
-            string state = Uri.EscapeDataString(CreateCode(32));
+                ?? throw new InvalidOperationException("Microsoft client ID not configured.");
+            const string microsoftAuthority =
+                "https://login.microsoftonline.com/consumers/oauth2/v2.0";
+            const int listenerPort = 5432;
+            const string callbackPath = "/callback";
+            string redirectUri = $"http://localhost:{listenerPort}{callbackPath}";
+            string state = CreateCode(32);
             string codeVerifier = CreateCode(64);
-            string codeChallenge = Uri.EscapeDataString(CreateCodeChallenge(codeVerifier));
-            string requestedScope = Uri.EscapeDataString("openid profile email offline_access User.Read Files.ReadWrite");
+            string codeChallenge = CreateCodeChallenge(codeVerifier);
+            string requestedScope = "openid profile email offline_access User.Read Files.ReadWrite.AppFolder";
 
             string authorizationUrl =
-                $"https://login.microsoftonline.com/{Uri.EscapeDataString(tenant)}/oauth2/v2.0/authorize" +
-                $"?client_id={clientId}" +
+                $"{microsoftAuthority}/authorize" +
+                $"?client_id={Uri.EscapeDataString(clientId)}" +
                 "&response_type=code" +
-                $"&redirect_uri={redirectUri}" +
+                $"&redirect_uri={Uri.EscapeDataString(redirectUri)}" +
                 "&response_mode=query" +
-                $"&scope={requestedScope}" +
-                $"&state={state}" +
-                $"&code_challenge={codeChallenge}" +
+                $"&scope={Uri.EscapeDataString(requestedScope)}" +
+                $"&state={Uri.EscapeDataString(state)}" +
+                $"&code_challenge={Uri.EscapeDataString(codeChallenge)}" +
                 "&code_challenge_method=S256";
 
             using var listener = new HttpListener();
-            listener.Prefixes.Add(redirectUri);
+            listener.Prefixes.Add(redirectUri + "/");
 
             try
             {
@@ -612,7 +614,7 @@ namespace StorageStandby.Backend.Services
                 };
 
                 using var tokenResponse = await _httpClient.PostAsync(
-                    $"https://login.microsoftonline.com/{Uri.EscapeDataString(tenant)}/oauth2/v2.0/token",
+                    $"{microsoftAuthority}/token",
                     new FormUrlEncodedContent(tokenRequest));
                 string tokenJson = await tokenResponse.Content.ReadAsStringAsync();
                 if (!tokenResponse.IsSuccessStatusCode)
