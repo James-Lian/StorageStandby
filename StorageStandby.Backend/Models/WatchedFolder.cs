@@ -1,5 +1,3 @@
-using System.ComponentModel.DataAnnotations.Schema;
-
 namespace StorageStandby.Backend.Models
 {
     /// A static class that holds reference values for watched folders.
@@ -50,9 +48,10 @@ namespace StorageStandby.Backend.Models
         // ---------------------------------------------------------------
         // Sync state information
         public DateTime? LastSync { get; set; }
+        public DateTime? NextSyncAt { get; set; }
         public DateTime DateAdded { get; set; }
-        [NotMapped]
-        public SyncFrequency? CustomSyncFrequency { get; set; } = null;
+        public SyncFrequency SyncFrequency { get; set; } = new();
+        public int SyncsToSkip { get; set; }
 
         // User assignments
         public void AddUserCloudAssignment(Providers provider, string accountId)

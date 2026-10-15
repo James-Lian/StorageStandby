@@ -34,7 +34,6 @@ namespace StorageStandby.Backend.Workers
         private readonly WatchedFolderService _watchedFolderService;
         private readonly SynchronizationService _synchronizationService;
         private CancellationToken _stoppingToken;
-        private DateTime _nextAutomaticSyncUtc = DateTime.MinValue;
 
         private readonly ConcurrentDictionary<long, FileSystemWatcher> _activeWatchers = new(); // WatchedFolderId, FileSystemWatcher
         private readonly ConcurrentDictionary<string, FileSystemWatcher> _activeWatchersParents = new(); // handles renames for WatchedFolders, but TODO: doesn't handle upper-stream naming changes (e.g. a folder rename in the grandfather's directory)
@@ -83,14 +82,9 @@ namespace StorageStandby.Backend.Workers
                 while (!stoppingToken.IsCancellationRequested)
                 {
                     await SyncWatchersFromDatabaseAsync(stoppingToken);
-                    TimeSpan? automaticInterval = await _synchronizationService
-                        .GetAutomaticSyncIntervalAsync(stoppingToken);
-                    if (!_state.GetSyncPause()
-                        && automaticInterval.HasValue
-                        && DateTime.UtcNow >= _nextAutomaticSyncUtc)
+                    if (!_state.GetSyncPause())
                     {
-                        await _synchronizationService.ExecuteSyncQueue(stoppingToken);
-                        _nextAutomaticSyncUtc = DateTime.UtcNow.Add(automaticInterval.Value);
+                        await _synchronizationService.ExecuteDueAutomaticSyncs(stoppingToken);
                     }
                     await Task.Delay(5000, stoppingToken);
                 }

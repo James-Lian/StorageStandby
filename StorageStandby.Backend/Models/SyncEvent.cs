@@ -9,6 +9,8 @@
         Succeeded = 3,
         Unfinished = 4,
         Other = 5,
+        Paused = 6,
+        Skipped = 7,
     }
 
     // One SyncEvent per WatchedFolder, per sync operation. This is a record of what happened during that sync.
@@ -18,6 +20,7 @@
         // Sync Event identifiers
         public long Id { get; set; }
         public long WatchedFolderId { get; set; }
+        public DateTime? ScheduledTimestamp { get; set; }
         public DateTime? CompletedTimestamp { get; set; } = null;
         public SyncEventType CompletionType { get; set; } = SyncEventType.Upcoming;
 
