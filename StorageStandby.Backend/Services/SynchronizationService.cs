@@ -507,7 +507,7 @@ namespace StorageStandby.Backend.Core
         // 2. Choose scan root (if localPath is omitted, use folder path)
             // Root chosen can be a subdirectory of WatchedFolder
         // 3. Enumerate local paths (all nested files and directories, or a single file)
-        // 4. Remove ignored paths
+        // 4. Remove ignored paths + update UntrackedPaths
         // 5. Load existing active queue items
         // 6. Update or create queue entries for existing files
         public async Task QueueResyncAsync(
@@ -572,8 +572,26 @@ namespace StorageStandby.Backend.Core
                 item => item.LocalPath,
                 StringComparer.OrdinalIgnoreCase);
 
+            // update untracked paths
+            var untrackedRecords = await db.UntrackedPaths
+                .Where(item =>
+                    item.WatchedFolderId == watchedFolderId
+                    && pathValues.Contains(item.LocalPath)
+                    && item.Status == UntrackedPathStatus.Untracked)
+                .ToListAsync(cancellationToken);
+            var untrackedByPath = untrackedRecords.ToDictionary(
+                item => item.LocalPath,
+                StringComparer.OrdinalIgnoreCase);
+            DateTime now = DateTime.UtcNow;
+
             foreach (var (path, isFolder) in paths)
             {
+                if (untrackedByPath.TryGetValue(path, out var untrackedRecord))
+                {
+                    untrackedRecord.Status = UntrackedPathStatus.Resolved;
+                    untrackedRecord.LastSeen = now;
+                }
+
                 if (activeByPath.TryGetValue(path, out var existing))
                 {
                     existing.IsFolder = isFolder;
