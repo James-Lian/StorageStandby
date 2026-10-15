@@ -268,6 +268,30 @@ namespace StorageStandby.Backend.Migrations
                     b.ToTable("WatchedFolderCloudMetadata");
                 });
 
+            modelBuilder.Entity("StorageStandby.Backend.Models.WatchedFolderUserCloudAssignment", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("AccountId")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Provider")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long>("WatchedFolderId")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("WatchedFolderId", "Provider", "AccountId")
+                        .IsUnique();
+
+                    b.ToTable("WatchedFolderUserCloudAssignments");
+                });
+
             modelBuilder.Entity("StorageStandby.Backend.Models.SyncEvent", b =>
                 {
                     b.HasOne("StorageStandby.Backend.Models.SystemSettings", null)
@@ -320,6 +344,15 @@ namespace StorageStandby.Backend.Migrations
                         .IsRequired();
                 });
 
+            modelBuilder.Entity("StorageStandby.Backend.Models.WatchedFolderUserCloudAssignment", b =>
+                {
+                    b.HasOne("StorageStandby.Backend.Models.WatchedFolder", null)
+                        .WithMany("UserAssignedClouds")
+                        .HasForeignKey("WatchedFolderId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("StorageStandby.Backend.Models.SystemSettings", b =>
                 {
                     b.Navigation("SyncEvents");
@@ -328,6 +361,8 @@ namespace StorageStandby.Backend.Migrations
             modelBuilder.Entity("StorageStandby.Backend.Models.WatchedFolder", b =>
                 {
                     b.Navigation("AssignedClouds");
+
+                    b.Navigation("UserAssignedClouds");
                 });
 #pragma warning restore 612, 618
         }

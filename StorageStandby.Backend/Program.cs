@@ -217,12 +217,12 @@ app.MapGet("/api/fileSystem/folder/getchildrencount", (
 });
 
 app.MapPost("/api/fileSystem/open-explorer", (
-    string localPath,
+    OpenExplorerRequest request,
     LocalFileSystemService fileSystem) =>
 {
-    if (fileSystem.IsFolder(localPath) == true)
+    if (fileSystem.IsFolder(request.LocalPath) == true)
     {
-        fileSystem.OpenExplorer(localPath);
+        fileSystem.OpenExplorer(request.LocalPath);
         return Results.Ok();
     } else
     {
@@ -238,15 +238,22 @@ app.MapPost("/api/fileSystem/open-explorer", (
 // DB: FOLDERS
 app.MapGet("/api/folders", (AppDbContext db) =>
 {
-    var folders = db.WatchedFolders.ToList();
+    var folders = db.WatchedFolders
+        .Include(folder => folder.AssignedClouds)
+        .Include(folder => folder.UserAssignedClouds)
+        .ToList();
     return Results.Ok(folders);
 });
 
+// return a folder using localpath prop
 app.MapGet("/api/folders/{localPath}", async (
     string localPath, 
     AppDbContext db) =>
 {
-    var folder = await db.WatchedFolders.FirstOrDefaultAsync(f => f.LocalPath == localPath);
+    var folder = await db.WatchedFolders
+        .Include(item => item.AssignedClouds)
+        .Include(item => item.UserAssignedClouds)
+        .FirstOrDefaultAsync(f => f.LocalPath == localPath);
     if (folder == null)
     {
         return Results.NotFound(new { Message = "Folder not found." });
@@ -254,6 +261,7 @@ app.MapGet("/api/folders/{localPath}", async (
     return Results.Ok(folder);
 });
 
+// resync a folder
 app.MapPost("/api/folders/{watchedFolderId:long}/resync", async (
     long watchedFolderId,
     string? localPath,
@@ -267,6 +275,7 @@ app.MapPost("/api/folders/{watchedFolderId:long}/resync", async (
     return Results.Ok(new { Message = "Resync queued." });
 });
 
+// reconcile a folder
 app.MapPost("/api/folders/{watchedFolderId:long}/reconcile", async (
     long watchedFolderId,
     SynchronizationService synchronizationService,
@@ -287,13 +296,14 @@ app.MapPost("/api/folders/{watchedFolderId:long}/clouds", async (
 {
     var folder = await db.WatchedFolders
         .Include(item => item.AssignedClouds)
+        .Include(item => item.UserAssignedClouds)
         .SingleOrDefaultAsync(item => item.Id == watchedFolderId, cancellationToken);
     if (folder is null)
     {
         return Results.NotFound(new { Message = "Folder not found." });
     }
 
-    await synchronizationService.AddToAssignedCloud(
+    await synchronizationService.AddToUserAssignedCloud(
         folder,
         request.Provider,
         request.AccountId,
@@ -359,6 +369,7 @@ app.MapDelete("/api/folders/{watchedFolderId:long}/clouds/{provider}/{accountId}
 {
     var folder = await db.WatchedFolders
         .Include(item => item.AssignedClouds)
+        .Include(item => item.UserAssignedClouds)
         .SingleOrDefaultAsync(item => item.Id == watchedFolderId, cancellationToken);
     if (folder is null)
     {
@@ -373,6 +384,8 @@ app.MapDelete("/api/folders/{watchedFolderId:long}/clouds/{provider}/{accountId}
     return Results.Ok(new { Message = "Cloud assignment removed." });
 });
 
+
+// TODO: wtf does this do
 app.MapPost("/api/folders/{watchedFolderId:long}/ignore-rules/reconcile", async (
     long watchedFolderId,
     IgnoreRulesChangeRequest request,
@@ -592,6 +605,7 @@ await app.RunAsync();
 // -------------------------------------------------------------------
 
 public record IgnoreRulesChangeRequest(string OldIgnoreRules, string NewIgnoreRules);
+public record OpenExplorerRequest(string LocalPath);
 
 public class RevokeReq
 {
