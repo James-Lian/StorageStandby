@@ -18,6 +18,7 @@ import { Folder, LayoutDashboard, Link as LucideLink, RefreshCw, ChartLine, Info
 import { Link } from 'react-router-dom'
 import { useConnectedAccounts } from "@/lib/connected-accounts"
 import { useWatchedFolders } from "@/lib/watched-folders";
+import { PROVIDER_METADATA, PROVIDERS } from "@/types/providers";
 
 function convertBytesToWrittenForm(amtBytes: number) {
     if (amtBytes > 1000000000) {
@@ -90,6 +91,10 @@ export function AppSidebar() {
                                     <SidebarMenuSubItem>
                                         <SidebarMenuSubButton asChild>
                                             <Link to="/link?provider=0" className="flex w-full">
+                                                {(() => {
+                                                    const Icon = PROVIDER_METADATA[PROVIDERS.Google]["icon"]
+                                                    return <Icon/>
+                                                })()}
                                                 <span>Google Drive</span><span className="flex-1"/><span>({googleDriveAccounts})</span>
                                             </Link>
                                         </SidebarMenuSubButton>
@@ -97,6 +102,10 @@ export function AppSidebar() {
                                     <SidebarMenuSubItem>
                                         <SidebarMenuSubButton asChild>
                                             <Link to="/link?provider=1" className="flex w-full">
+                                                {(() => {
+                                                    const Icon = PROVIDER_METADATA[PROVIDERS.Microsoft]["icon"]
+                                                    return <Icon/>
+                                                })()}
                                                 <span>OneDrive</span><span className="flex-1"/><span>({oneDriveAccounts})</span>
                                             </Link>
                                         </SidebarMenuSubButton>
@@ -104,6 +113,10 @@ export function AppSidebar() {
                                     <SidebarMenuSubItem>
                                         <SidebarMenuSubButton asChild>
                                             <Link to="/link?provider=2" className="flex w-full">
+                                                {(() => {
+                                                    const Icon = PROVIDER_METADATA[PROVIDERS.Dropbox]["icon"]
+                                                    return <Icon/>
+                                                })()}
                                                 <span>Dropbox</span><span className="flex-1"/><span>({dropboxAccounts})</span>
                                             </Link>
                                         </SidebarMenuSubButton>
