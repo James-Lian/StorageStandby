@@ -50,7 +50,6 @@ namespace StorageStandby.Backend.Services
         }
 
         private string AuthScope = "https://www.googleapis.com/auth/drive.file " +
-                "https://www.googleapis.com/auth/drive.activity " +
                 "openid " +
                 "email " +
                 "profile";
@@ -936,7 +935,8 @@ namespace StorageStandby.Backend.Services
                     Message = "Google Drive OAuth connection revoked."
                 };
             }
-            // 3.5 Handle errors (e.g., 400 Bad Request) safely by checking for content
+            // Google returns invalid_token when the credential was already revoked or invalidated.
+            // Remove the local credential so future requests do not keep retrying it.
             else if (tokenResponse.Content.Headers.ContentLength > 0)
             {
                 string jsonContent = await tokenResponse.Content.ReadAsStringAsync();
@@ -952,6 +952,16 @@ namespace StorageStandby.Backend.Services
                         string description = root.TryGetProperty("error_description", out var descElement)
                             ? descElement.GetString() ?? "No description provided."
                             : "No description provided.";
+
+                        if (string.Equals(error, "invalid_token", StringComparison.Ordinal))
+                        {
+                            await _tokenManager.DeleteRefreshTokenAsync(Providers.Google, accountId);
+                            return new AuthResult
+                            {
+                                Success = true,
+                                Message = "Google token was already invalid. Local credentials were removed."
+                            };
+                        }
 
                         return new AuthResult
                         {
