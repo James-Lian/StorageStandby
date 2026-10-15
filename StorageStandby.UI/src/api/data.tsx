@@ -47,83 +47,89 @@ export async function fetchWatchedFolder(localPath: string, fName: string = "fet
     })
 }
 
-// export async function fetchWatchedFolderProp() {
-//     try {
-//         const response = await fetch(`http://storagestandby.local/api/folders`);
-
-//         if (!response.ok) {
-//             const details = await readErrorDetails(response);
-//             logApiProblemDetailsError({
-//                 fallbackTitle: "Response invalid; Failed to fetch all watched folders",
-//                 details
-//             })
-//             throw new Error("fetchAllWatchedFolders: Failed to fetch all watched folders");
-//         }
-
-//         const data = await response.json();
-
-//         return data;        
-//     } catch (error) {
-//         if (error instanceof Error && error.message.startsWith("fetchAllWatchedFolders:")) {
-//             throw error
-//         }
-
-//         logError({
-//             title: "fetchAllWatchedFolders: Failed to fetch all watched folders",
-//             details: error instanceof Error
-//                 ? {
-//                     name: error.name,
-//                     message: error.message,
-//                     stack: error.stack,
-//                     cause: error.cause,
-//                 }
-//                 : error,
-//         })
-
-//         throw error
-//     }
-// }
-
-export async function fetchFolderIgnoreRules() {
-    try {
-        
-    }
-    catch (error) {
-        if (error instanceof Error && error.message.startsWith("fetchFolderIgnoreRules:")) {
-            throw error
+export async function addFolderCloud(
+    folderId: number,
+    cloud: { provider: number; accountId: string },
+    fName: string = "addFolderCloud",
+): Promise<void> {
+    return ErrorHandlingWrapper(fName, async () => {
+        const response = await fetch(`http://storagestandby.local/api/folders/${folderId}/clouds`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(cloud),
+        });
+        if (!response.ok) {
+            const details = await readErrorDetails(response);
+            logApiProblemDetailsError({ fallbackTitle: `${fName}: response invalid`, details });
+            throw new Error(`${fName}: Failed to request cloud assignment`);
         }
-
-        logError({
-            title: "fetchFolderIgnoreRules: Failed to fetch all watched folders",
-            details: error instanceof Error
-                ? {
-                    name: error.name,
-                    message: error.message,
-                    stack: error.stack,
-                    cause: error.cause,
-                }
-                : error,
-        })
-
-        throw error
-    }
+    });
 }
 
-export async function editFolderIgnoreRules(localPath: string, newIgnoreRules: string) {
+export async function removeFolderCloud(
+    folderId: number,
+    cloud: { provider: number; accountId: string },
+    fName: string = "removeFolderCloud",
+): Promise<void> {
+    return ErrorHandlingWrapper(fName, async () => {
+        const response = await fetch(
+            `http://storagestandby.local/api/folders/${folderId}/clouds/${cloud.provider}/${encodeURIComponent(cloud.accountId)}`,
+            { method: "DELETE" },
+        );
+        if (!response.ok) {
+            const details = await readErrorDetails(response);
+            logApiProblemDetailsError({ fallbackTitle: `${fName}: response invalid`, details });
+            throw new Error(`${fName}: Failed to remove cloud assignment`);
+        }
+    });
+}
 
+export async function resyncFolder(
+    folderId: number,
+    fName: string = "resyncFolder"
+): Promise<void> {
+    return ErrorHandlingWrapper(fName, async () => {
+        const response = await fetch(
+            `http://storagestandby.local/api/folders/${folderId}/resync`,
+            { method: "POST" }
+        )
+
+        if (!response.ok) {
+            const details = await readErrorDetails(response);
+            logApiProblemDetailsError({ fallbackTitle: `${fName}: response invalid`, details });
+            throw new Error(`${fName}: Failed to resync folder`);
+        }
+    })
+}
+
+export async function reconcileFolderIgnoreRules(
+    folderId: number, 
+    oldIgnoreRules: string,
+    newIgnoreRules: string,
+    fName: string = "reconcileFolderIgnoreRules"
+): Promise<void> {
+    return ErrorHandlingWrapper(fName, async () => {
+        const response = await fetch(
+            `http://storagestandby.local/api/folders/${folderId}/ignore-rules/reconcile`,
+            { 
+                method: "POST",
+                headers: {"Content-Type": "application/json"},
+                body: JSON.stringify({OldIgnoreRules: oldIgnoreRules, NewIgnoreRules: newIgnoreRules})
+            }
+        )
+
+        if (!response.ok) {
+            const details = await readErrorDetails(response);
+            logApiProblemDetailsError({ fallbackTitle: `${fName}: response invalid`, details });
+            throw new Error(`${fName}: fail`);
+        }
+    })
 }
 
 // ---------------------------------------------------------------------------
 // SETTINGS
 // ---------------------------------------------------------------------------
 
-export async function fetchGlobalIgnoreRules() {
-
-}
-
-export async function editGlocalIgnoreRules() {
-
-}
 
 export async function fetchSystemSettings(fName: string = "fetchSystemSettings"): Promise<SystemSettings> {
     return ErrorHandlingWrapper(fName, async () => {

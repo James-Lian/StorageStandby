@@ -46,7 +46,7 @@ import { readErrorDetails } from "@/lib/read-errors-utils"
 import { PROVIDER_METADATA, type Providers } from "@/types/providers"
 import { useConnectedAccounts } from "@/lib/connected-accounts"
 import { ConfirmationModal } from "@/components/confirmation-dialog"
-import { fetchOpenExplorer } from "@/api/data"
+import { addFolderCloud, fetchOpenExplorer, removeFolderCloud, resyncFolder } from "@/api/data"
 import type { ConnectedAccount } from "@/api/accounts"
 
 
@@ -330,6 +330,56 @@ export function Folders() {
 		return false
 	}
 
+	// joining provider and accountid to create a unique identifier for combobox
+	const getCloudKey = (cloud: { provider: number; accountId: string }) =>
+    	`${cloud.provider}:${cloud.accountId}`
+
+	// parsing that unique identifier to retrieve provider and accountId
+	const parseCloudKey = (value: string) => {
+		const separatorIndex = value.indexOf(":")
+
+		return {
+			provider: Number(value.slice(0, separatorIndex)),
+			accountId: value.slice(separatorIndex + 1),
+		}
+	}
+
+	const handleCloudSelectionChange = async (
+		folder: WatchedFolder,
+		nextValues: string[],
+	) => {
+		const previousValues = [
+			...folder.assignedClouds.map(getCloudKey),
+        	...folder.userAssignedClouds.map(getCloudKey),
+		]
+
+		const previous = new Set(previousValues)
+		const next = new Set(nextValues)
+
+		const selected = nextValues.filter((value) => !previous.has(value))
+		const deselected = previousValues.filter((value) => !next.has(value))
+
+		try {
+			await Promise.all(selected.map((value) =>
+				addFolderCloud(folder.id, parseCloudKey(value)),
+			))
+			await Promise.all(deselected.map((value) =>
+				removeFolderCloud(folder.id, parseCloudKey(value)),
+			))
+			await refreshWatchedFolders()
+			notifySuccess({
+				title: "Cloud assignments updated",
+				summary: "New assignments will be synchronized automatically.",
+			})
+		} catch (error) {
+			notifyError({
+				title: "Failed to update cloud assignments",
+				summary: error instanceof Error ? error.message : String(error),
+			})
+			await refreshWatchedFolders()
+		}
+	}
+
 	return (
 		<div className="space-y-6 p-4">
 			<ConfirmationModal
@@ -447,6 +497,8 @@ export function Folders() {
 							<TableHead>Sync status</TableHead>
 							<TableHead>Last synced</TableHead>
 							<TableHead>Clouds</TableHead>
+							<TableHead>Ignore Rules</TableHead>
+							<TableHead>Track Snapshots</TableHead>
 							<TableHead>Problem</TableHead>
 							<TableHead className="text-right"></TableHead>
 						</TableRow>
@@ -479,22 +531,23 @@ export function Folders() {
 									<div className="inline-flex w-fit h-fit items-center gap-1">
 										<Tooltip>
 											<TooltipTrigger asChild>
-												<Button variant="link" className="cursor-pointer">
+												<Button 
+													variant="link" 
+													className="cursor-pointer"
+													onClick={(event: React.MouseEvent<HTMLButtonElement>) => {
+														// check if Control key was held down
+														if (event.ctrlKey) {
+															handleOpenExplorer(folder.localPath);
+														} else {
+															console.log("Hi")
+														}
+													}}
+												>
 													{getFolderName(folder)}
 												</Button>
 											</TooltipTrigger>
 											<TooltipContent>
 												{folder.localPath ?? "No local path"}
-											</TooltipContent>
-										</Tooltip>
-										<Tooltip>
-											<TooltipTrigger asChild>
-												{getFolderStatus(folder) == "Synced" ? <CircleCheck className="size-4" />
-													: getFolderStatus(folder) == "Pending" ? <CircleDashed className="size-4" />
-													: <CircleX className="size-4 text-destructive"/>}
-											</TooltipTrigger>
-											<TooltipContent>
-												{getProblemLabel(folder.problem)}
 											</TooltipContent>
 										</Tooltip>
 									</div>
@@ -510,8 +563,11 @@ export function Folders() {
 								<TableCell>
 									<Combobox
 										multiple
-										value={[...folder.assignedClouds.map((cloud) => `${cloud.provider}:${cloud.accountId}`), ...folder.userAssignedClouds.map((cloud) => `${cloud.provider}:${cloud.accountId}`)]}
-										onValueChange={(value) => undefined}
+										value={[
+											...folder.assignedClouds.map(getCloudKey), 
+											...folder.userAssignedClouds.map(getCloudKey)
+										]}
+										onValueChange={(value) => {handleCloudSelectionChange(folder, value)}}
 									>
 										<ComboboxTrigger aria-label={`${folder.assignedClouds.length} assigned cloud accounts`}>
 											<ComboboxValue>{folder.assignedClouds.length}</ComboboxValue>
@@ -561,7 +617,15 @@ export function Folders() {
 											<DropdownMenuContent>
 												<DropdownMenuItem
 													onClick={() => {handleOpenExplorer(folder.localPath)}}
-												>Open explorer</DropdownMenuItem>
+												>
+													Open explorer
+												</DropdownMenuItem>
+												<DropdownMenuItem
+													onClick={() => {resyncFolder(folder.id)}}
+												>
+													Requeue folder for sync
+													{/* "Resync" */}
+												</DropdownMenuItem>
 												<DropdownMenuItem 
 													variant="destructive"
 													onClick={() => {handleRemoveFolder(folder.id)}}

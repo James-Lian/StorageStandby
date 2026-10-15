@@ -384,8 +384,8 @@ app.MapDelete("/api/folders/{watchedFolderId:long}/clouds/{provider}/{accountId}
     return Results.Ok(new { Message = "Cloud assignment removed." });
 });
 
-
-// TODO: wtf does this do
+// 1. Reconciles pending synchronization work against change in ignore rules
+// 2. Saves new ignore rules to the IgnoreRules prop
 app.MapPost("/api/folders/{watchedFolderId:long}/ignore-rules/reconcile", async (
     long watchedFolderId,
     IgnoreRulesChangeRequest request,
