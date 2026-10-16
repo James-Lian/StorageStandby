@@ -286,5 +286,59 @@ namespace StorageStandby.Backend.Services
 
             return -1;
         }
+
+        public class DirectoryNode
+        {
+            public string Name { get; set; } = string.Empty;
+            public string FullPath { get; set; } = string.Empty;
+            public bool IsDirectory { get; set; }
+            public List<DirectoryNode> Children { get; set; } = new();
+        }
+
+        public DirectoryNode? BuildDirectoryTree(string directory)
+        {
+            if (!Directory.Exists(directory))
+            {
+                return null;
+            }
+
+            var directoryInfo = new DirectoryInfo(directory);
+
+            var rootNode = new DirectoryNode
+            {
+                Name = directoryInfo.Name,
+                FullPath = directoryInfo.FullName,
+                IsDirectory = true
+            };
+
+            try
+            {
+                foreach (var subDir in directoryInfo.GetDirectories())
+                {
+                    rootNode.Children.Add(BuildDirectoryTree(subDir.FullName));
+                }
+
+                foreach (var file in directoryInfo.GetFiles())
+                {
+                    rootNode.Children.Add(new DirectoryNode
+                    {
+                        Name = file.Name,
+                        FullPath = file.FullName,
+                        IsDirectory = false
+                        // Files won't have children, so the list stays empty
+                    });
+                }
+            } 
+            catch (UnauthorizedAccessException _)
+            {
+                
+            }
+            catch (DirectoryNotFoundException _)
+            {
+                
+            }
+
+            return rootNode;
+        }
     }
 }
