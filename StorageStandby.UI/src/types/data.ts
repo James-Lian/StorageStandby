@@ -73,6 +73,13 @@ export type PendingSyncItem = {
     moved: boolean
 }
 
+export type DirectoryNode = {
+    name: string
+    fullPath: string
+    isDirectory: boolean
+    children: (DirectoryNode | null)[]
+}
+
 export type FailedItemDetails = {
     failedItem: string
     details: string

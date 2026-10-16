@@ -315,11 +315,20 @@ namespace StorageStandby.Backend.Services
             {
                 foreach (var subDir in directoryInfo.GetDirectories())
                 {
-                    rootNode.Children.Add(BuildDirectoryTree(subDir.FullName));
+                    DirectoryNode? child = BuildDirectoryTree(subDir.FullName);
+                    if (child is not null)
+                    {
+                        rootNode.Children.Add(child);
+                    }
                 }
 
                 foreach (var file in directoryInfo.GetFiles())
                 {
+                    if (string.Equals(file.Name, "desktop.ini", StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
                     rootNode.Children.Add(new DirectoryNode
                     {
                         Name = file.Name,

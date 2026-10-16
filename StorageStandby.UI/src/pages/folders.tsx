@@ -47,7 +47,8 @@ import { PROVIDER_METADATA, type Providers } from "@/types/providers"
 import { useConnectedAccounts } from "@/lib/connected-accounts"
 import { ConfirmationModal } from "@/components/confirmation-dialog"
 import { IgnoreRulesDialog } from "@/components/ignore-rules-dialog"
-import { addFolderCloud, fetchOpenExplorer, reconcileFolderIgnoreRules, removeFolderCloud, resyncFolder } from "@/api/data"
+import { DirectoryTreeDialog } from "@/components/directory-tree-dialog"
+import { addFolderCloud, reconcileFolderIgnoreRules, removeFolderCloud, resyncFolder } from "@/api/data"
 import type { ConnectedAccount } from "@/api/accounts"
 
 import { getFolderName, handleOpenExplorer } from "@/lib/utils"
@@ -74,6 +75,7 @@ const getFolderStatus = (folder: WatchedFolder) =>
 	folder.problem === PROBLEMATIC_FOLDER_TYPE.None
 		? folder.lastSync ? "Synced" : "Pending"
 		: "Issue"
+// Up-to-date, Queued, Pending, Issue
 
 const formatDate = (value: string | null) =>
 	value ? new Date(value).toLocaleString() : "Never"
@@ -138,6 +140,7 @@ export function Folders() {
 	const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false)
 	const [pendingDeleteIds, setPendingDeleteIds] = useState<number[]>([])
 	const [ignoreRulesFolder, setIgnoreRulesFolder] = useState<WatchedFolder | null>(null)
+	 const [directoryTreeFolder, setDirectoryTreeFolder] = useState<WatchedFolder | null>(null)
 
 	// listens for WebView2 message from native folder picker in useEffect, e.g. {"type": "folder-selected", "path": "C:\example"}
 	// useCallback memoizes the function
@@ -419,6 +422,14 @@ export function Folders() {
 				basePath={ignoreRulesFolder?.localPath ?? undefined}
 				title="Folder ignore rules"
 			/>
+			<DirectoryTreeDialog
+				open={directoryTreeFolder !== null}
+				onOpenChange={(open) => {
+					if (!open) setDirectoryTreeFolder(null)
+				}}
+				folderPath={directoryTreeFolder?.localPath ?? null}
+				ignoreRules={directoryTreeFolder?.ignoreRules ?? ""}
+			/>
 			<ConfirmationModal
 				isOpen={isDeleteDialogOpen}
 				onClose={() => {
@@ -534,7 +545,7 @@ export function Folders() {
 									className="border-black"
 								/>
 							</TableHead>
-							<TableHead>Name</TableHead>
+							<TableHead className="pl-4">Name</TableHead>
 							<TableHead>Sync status</TableHead>
 							<TableHead>Last synced</TableHead>
 							<TableHead>Clouds</TableHead>
@@ -580,7 +591,7 @@ export function Folders() {
 														if (event.ctrlKey) {
 															handleOpenExplorer(folder.localPath);
 														} else {
-															
+															setDirectoryTreeFolder(folder)
 														}
 													}}
 												>
