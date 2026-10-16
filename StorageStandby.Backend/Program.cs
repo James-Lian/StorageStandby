@@ -276,7 +276,7 @@ app.MapPost("/api/open-url", (OpenUrlRequest request) => {
     }
 });
 
-app.MapGet("/api/fileSystem/builddirectorytree/{path}", (
+app.MapGet("/api/fileSystem/builddirectorytree", (
     string path,
     LocalFileSystemService fileSystem
 ) => {

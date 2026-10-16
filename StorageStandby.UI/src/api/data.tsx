@@ -1,6 +1,6 @@
 import { logApiProblemDetailsError, readErrorDetails } from "@/lib/read-errors-utils";
 import { ErrorHandlingWrapper } from "./errorhandling";
-import type { PendingSyncItem, SyncEvent, SystemSettings, WatchedFolder } from "@/types/data";
+import type { DirectoryNode, PendingSyncItem, SyncEvent, SystemSettings, WatchedFolder } from "@/types/data";
 
 // ---------------------------------------------------------------------------
 // WATCHED FOLDERS
@@ -283,5 +283,20 @@ export async function fetchOpenExplorer(folderPath: string, fName: string = "fet
             throw new Error(responseFailTitle);
         }
 
+    })
+}
+
+export async function fetchDirectoryTree(
+    folderPath: string,
+    fName: string = "fetchDirectoryTree",
+): Promise<DirectoryNode | null> {
+    return ErrorHandlingWrapper(fName, async () => {
+        const response = await fetch(
+            `http://storagestandby.local/api/fileSystem/builddirectorytree?path=${encodeURIComponent(folderPath)}`,
+        )
+        if (!response.ok) {
+            throw new Error(`${fName}: Failed to build directory tree`)
+        }
+        return await response.json() as DirectoryNode | null
     })
 }
