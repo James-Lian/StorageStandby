@@ -10,7 +10,23 @@ export type WatchedFolder = {
     snapshotUrls: string
     problem: number
     lastSync: string | null
+    nextSyncAt: string | null
     dateAdded: string
+    syncFrequency: SyncFrequency
+    syncsToSkip: number
+}
+
+export const SyncIncrements = {
+    Inactive: 0,
+    Daily: 1,
+    Weekly: 2,
+    Monthly: 3,
+} as const
+
+export type SyncFrequency = {
+    multiplier: number
+    identifiers: number[]
+    syncIncrements: number
 }
 
 export type WatchedFolderCloudMetadata = {
@@ -34,6 +50,7 @@ export type WatchedFolderUserCloudAssignment = {
 export type SyncEvent = {
     id: number
     watchedFolderId: number
+    scheduledTimestamp: string | null
     completedTimestamp: string | null
     completionType: number
     provider: number
@@ -43,6 +60,17 @@ export type SyncEvent = {
     failedItems: FailedItemDetails[]
     unfinishedItems: string
     unfinishedItemIds: string
+}
+
+export type PendingSyncItem = {
+    id: number
+    watchedFolderId: number
+    localPath: string
+    isFolder: boolean
+    created: boolean
+    changed: boolean
+    renamed: boolean
+    moved: boolean
 }
 
 export type FailedItemDetails = {
@@ -56,5 +84,4 @@ export type SystemSettings = {
     pauseSyncUntil: string | null
     syncEvents: SyncEvent[]
     automaticSyncs: boolean
-    automaticSyncIntervalMinutes: number
 }

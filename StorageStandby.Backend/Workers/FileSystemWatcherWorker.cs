@@ -470,9 +470,10 @@ namespace StorageStandby.Backend.Workers
             await using var scope = _scopeFactory.CreateAsyncScope();
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
-            var item = await db.PendingSyncQueue.FirstOrDefaultAsync(
-                i => searchConditions(i),
-                stoppingToken);
+            var candidates = await db.PendingSyncQueue
+                .Where(i => i.WatchedFolderId == syncItem.WatchedFolderId && !i.Deleted)
+                .ToListAsync(stoppingToken);
+            var item = candidates.FirstOrDefault(searchConditions);
             // PendingSyncItem exists
             if (item is not null)
             {
@@ -495,9 +496,10 @@ namespace StorageStandby.Backend.Workers
             await using var scope = _scopeFactory.CreateAsyncScope();
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
-            var item = await db.PendingSyncQueue.FirstOrDefaultAsync(
-                i => searchConditions(i),
-                stoppingToken);
+            var candidates = await db.PendingSyncQueue
+                .Where(i => i.WatchedFolderId == syncItem.WatchedFolderId && !i.Deleted)
+                .ToListAsync(stoppingToken);
+            var item = candidates.FirstOrDefault(searchConditions);
             // PendingSyncItem exists
             if (item is not null)
             {
@@ -661,7 +663,7 @@ namespace StorageStandby.Backend.Workers
             var pendingItems = await db.PendingSyncQueue
                 .Where(item =>
                     item.WatchedFolderId == watchedFolderId &&
-                    !item.IsTerminal())
+                    !item.Deleted)
                 .ToListAsync(stoppingToken);
 
             foreach (var item in pendingItems)
@@ -873,7 +875,7 @@ namespace StorageStandby.Backend.Workers
                 .ToListAsync(stoppingToken);
 
             var existingActiveItems = existingItems
-                .Where(item => !item.IsTerminal())
+                .Where(item => !item.Deleted)
                 .GroupBy(item => item.LocalPath, StringComparer.OrdinalIgnoreCase)
                 .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
 

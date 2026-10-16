@@ -19,6 +19,9 @@ import { Link } from 'react-router-dom'
 import { useConnectedAccounts } from "@/lib/connected-accounts"
 import { useWatchedFolders } from "@/lib/watched-folders";
 import { PROVIDER_METADATA, PROVIDERS } from "@/types/providers";
+import { Button } from "./ui/button";
+import { notifyInfo } from "@/lib/notifications";
+import { openInDefaultBrowser } from "@/api/utils";
 
 function convertBytesToWrittenForm(amtBytes: number) {
     if (amtBytes > 1000000000) {
@@ -135,9 +138,19 @@ export function AppSidebar() {
                                     </a>
                                 </SidebarMenuButton>
                                 <SidebarMenuButton asChild>
-                                    <a>
+                                    <Button
+                                        variant={"link"}
+                                        className="items-center justify-start cursor-pointer"
+                                        onClick={() => {
+                                            openInDefaultBrowser("https://github.com/James-Lian/StorageStandby")
+                                            notifyInfo({ 
+                                                title: "URL opened", 
+                                                summary: `Open your browser to view the GitHub`
+                                            })
+                                        }}
+                                    >
                                         <Info /><span>Info</span>
-                                    </a>
+                                    </Button>
                                 </SidebarMenuButton>
                             </SidebarMenuItem>
                         </SidebarMenu>

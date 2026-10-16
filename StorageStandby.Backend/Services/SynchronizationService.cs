@@ -669,7 +669,7 @@ namespace StorageStandby.Backend.Core
             var activeItems = await db.PendingSyncQueue
                 .Where(item => item.WatchedFolderId == watchedFolderId
                     && pathValues.Contains(item.LocalPath)
-                    && !item.IsTerminal())
+                    && !item.Deleted)
                 .ToListAsync(cancellationToken);
             var activeByPath = activeItems.ToDictionary(
                 item => item.LocalPath,
@@ -740,7 +740,7 @@ namespace StorageStandby.Backend.Core
                 .ToList();
             var currentPaths = paths.Select(item => item.Path).ToHashSet(StringComparer.OrdinalIgnoreCase);
             var queuedPaths = await db.PendingSyncQueue
-                .Where(item => item.WatchedFolderId == watchedFolderId && !item.IsTerminal())
+                .Where(item => item.WatchedFolderId == watchedFolderId && !item.Deleted)
                 .Select(item => item.LocalPath)
                 .ToListAsync(cancellationToken);
             var queued = queuedPaths.ToHashSet(StringComparer.OrdinalIgnoreCase);

@@ -1,11 +1,29 @@
-import { useEffect, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Checkbox } from "@/components/ui/checkbox"
+import { Pause, Play, RefreshCw } from "lucide-react"
 import { cn } from "@/lib/utils"
-import { Pause, Play, RefreshCw, X } from "lucide-react"
+import {
+    pauseCurrentSync,
+    fetchPendingSyncItems,
+    setSyncPaused,
+    triggerSync,
+} from "@/api/data"
+import { refreshSyncEvents, useSyncEvents } from "@/lib/sync-events"
+import { refreshWatchedFolders, useWatchedFolders } from "@/lib/watched-folders"
+import { getProviderDisplayName, type Providers } from "@/types/providers"
+import type { SyncEvent } from "@/types/data"
+
+type QueueRow = {
+    id: string
+    folderId: number
+    folderPath: string | null | undefined
+    provider: Providers
+    accountId: string
+    pendingCount: number
+    nextSyncAt: string | null
+}
 
 export function Sync() {
 
@@ -16,15 +34,93 @@ export function Sync() {
     // Sync: active governance and settings
 
     const [isPaused, setIsPaused] = useState(false)
-
-    const [selectedRows, setSelectedRows] = useState<string[]>([])
-    const [queueRows, setQueueRows] = useState([
-        { id: "projects", folder: "C:/Users/james/Projects", priority: "Critical", nextSync: "Daily" },
-    ])
+    const [pendingItems, setPendingItems] = useState<Awaited<ReturnType<typeof fetchPendingSyncItems>>>([])
+    const { events, error: eventsError } = useSyncEvents()
+    const { folders } = useWatchedFolders()
 
     useEffect(() => {
+        void refreshSyncEvents()
+        void refreshWatchedFolders()
+        void fetchPendingSyncItems().then(setPendingItems).catch(console.error)
 
+        const refreshTimer = window.setInterval(() => {
+            void refreshSyncEvents()
+            void fetchPendingSyncItems().then(setPendingItems).catch(console.error)
+        }, 2000)
+
+        return () => window.clearInterval(refreshTimer)
     }, [])
+
+    useEffect(() => {
+        console.log("Pending sync items:", pendingItems)
+    }, [pendingItems])
+
+    const queueRows = useMemo<QueueRow[]>(() => {
+        const foldersById = new Map(folders.map((folder) => [folder.id, folder]))
+        const pendingByFolder = new Map<number, number>()
+        for (const item of pendingItems) {
+            pendingByFolder.set(item.watchedFolderId, (pendingByFolder.get(item.watchedFolderId) ?? 0) + 1)
+        }
+
+        const rows: QueueRow[] = []
+        for (const [folderId, pendingCount] of pendingByFolder) {
+            const folder = foldersById.get(folderId)
+            if (!folder) continue
+
+            const destinations = [
+                ...folder.assignedClouds
+                    .filter((cloud) => cloud.state !== 4 && cloud.state !== 5)
+                    .map((cloud) => ({ provider: cloud.provider, accountId: cloud.accountId })),
+                ...folder.userAssignedClouds.map((cloud) => ({ provider: cloud.provider, accountId: cloud.accountId })),
+            ]
+            const uniqueDestinations = new Map(
+                destinations.map((destination) => [
+                    `${destination.provider}:${destination.accountId.toLowerCase()}`,
+                    destination,
+                ])
+            )
+
+            for (const destination of uniqueDestinations.values()) {
+                rows.push({
+                    id: `${folderId}:${destination.provider}:${destination.accountId}`,
+                    folderId,
+                    folderPath: folder.localPath,
+                    provider: destination.provider,
+                    accountId: destination.accountId,
+                    pendingCount,
+                    nextSyncAt: folder.nextSyncAt,
+                })
+            }
+        }
+
+        return rows.sort((left, right) =>
+            (left.nextSyncAt ?? "").localeCompare(right.nextSyncAt ?? ""))
+    }, [folders, pendingItems])
+
+    const currentRows = useMemo(() => {
+        const foldersById = new Map(folders.map((folder) => [folder.id, folder]))
+        return events
+            .filter((event) => event.completionType === 1)
+            .map((event) => ({ event, folder: foldersById.get(event.watchedFolderId) }))
+    }, [events, folders])
+
+    const refreshQueue = async () => {
+        await refreshSyncEvents()
+        const refreshedPendingItems = await fetchPendingSyncItems()
+        setPendingItems(refreshedPendingItems)
+    }
+
+    const handleEventAction = async (action: () => Promise<void>) => {
+        try {
+            await action()
+            await refreshQueue()
+        } catch (error) {
+            console.error(error)
+        }
+    }
+
+    const getFolderLabel = (event: SyncEvent, localPath: string | null | undefined) =>
+        localPath ?? `Folder ${event.watchedFolderId}`
 
     return (
         <div className="space-y-6 p-4">
@@ -81,6 +177,7 @@ export function Sync() {
                     <Button
                         size="lg"
                         className="bg-linear-to-r from-sky-500 to-indigo-500 text-white shadow-md hover:from-sky-600 hover:to-indigo-600"
+                        onClick={() => void handleEventAction(triggerSync)}
                     >
                         <RefreshCw className="mr-2 size-4" /> Sync All Now
                     </Button>
@@ -88,7 +185,10 @@ export function Sync() {
                         <Button
                             size="lg"
                             className="bg-indigo-600 text-white shadow-md hover:bg-indigo-700"
-                            onClick={() => setIsPaused(false)}
+                            onClick={() => void handleEventAction(async () => {
+                                await setSyncPaused(false)
+                                setIsPaused(false)
+                            })}
                         >
                             <Play className="mr-2 size-4" /> Resume
                         </Button>
@@ -96,7 +196,10 @@ export function Sync() {
                         <Button
                             size="lg"
                             className="bg-red-600/75 text-white shadow-md hover:bg-red-700/75"
-                            onClick={() => setIsPaused(true)}
+                            onClick={() => void handleEventAction(async () => {
+                                await setSyncPaused(true)
+                                setIsPaused(true)
+                            })}
                         >
                             <Pause className="mr-2 size-4" /> Pause
                         </Button>
@@ -104,90 +207,94 @@ export function Sync() {
                 </div>
             </div>
 
-            {/* Active & Queue Section */}
+            {/* Current jobs */}
+            <div className="rounded-2xl border border-border bg-background p-4 space-y-4">
+                <div className="flex items-center justify-between">
+                    <div>
+                        <h2 className="text-lg font-semibold">Current Jobs</h2>
+                        <p className="text-sm text-muted-foreground">Provider operations currently in progress.</p>
+                    </div>
+                    <Badge variant="outline">{currentRows.length} Active</Badge>
+                </div>
+
+                {currentRows.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">No sync jobs are currently running.</p>
+                ) : (
+                    <Table>
+                        <TableHeader>
+                            <TableRow>
+                                <TableHead>Folder Path</TableHead>
+                                <TableHead>Destination</TableHead>
+                                <TableHead>Account</TableHead>
+                                <TableHead>Changes Tracked</TableHead>
+                                {/* Number of changes tracked */}
+                                <TableHead className="text-right">Actions</TableHead>
+                            </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                            {currentRows.map(({ event, folder }) => (
+                                <TableRow key={event.id}>
+                                    <TableCell className="font-medium">{getFolderLabel(event, folder?.localPath)}</TableCell>
+                                    <TableCell>{getProviderDisplayName(event.provider as Providers)}</TableCell>
+                                    <TableCell>{event.accountId}</TableCell>
+                                    <TableCell className="text-right">
+                                        <Button
+                                            variant="outline"
+                                            size="sm"
+                                            onClick={() => void handleEventAction(async () => {
+                                                await pauseCurrentSync()
+                                            })}
+                                        >
+                                            <Pause className="mr-2 size-4" /> Pause Current Job
+                                        </Button>
+                                    </TableCell>
+                                </TableRow>
+                            ))}
+                        </TableBody>
+                    </Table>
+                )}
+            </div>
+
+            {/* Upcoming & queued events */}
             <div className="rounded-2xl border border-border bg-background p-4 space-y-4">
                 <div className="flex items-center justify-between">
                     <div>
                         <h2 className="text-lg font-semibold">Upcoming Sync Queue</h2>
                         <p className="text-sm text-muted-foreground">Pending synchronization operations ordered by priority.</p>
                     </div>
-                    <Badge variant="outline">3 Queued</Badge>
+                    <Badge variant="outline">{queueRows.length} Queued</Badge>
                 </div>
 
                 <Table>
                     <TableHeader>
                         <TableRow>
-                            <TableHead className="w-12">
-                                <Checkbox
-                                    checked={queueRows.length > 0 && selectedRows.length === queueRows.length}
-                                    onCheckedChange={() => {
-                                        if (selectedRows.length === queueRows.length) {
-                                            setSelectedRows([])
-                                        } else {
-                                            setSelectedRows(queueRows.map((row) => row.id))
-                                        }
-                                    }}
-                                    aria-label="Select all rows"
-                                />
-                            </TableHead>
                             <TableHead>Folder Path</TableHead>
-                            <TableHead>Priority</TableHead>
-                            <TableHead>Target Cloud</TableHead>
+                            <TableHead>Destination</TableHead>
+                            <TableHead>Account</TableHead>
+                            <TableHead>Pending Changes</TableHead>
                             <TableHead>Next Sync</TableHead>
                             <TableHead className="text-right">Actions</TableHead>
-                            <TableHead className="w-12"></TableHead>
                         </TableRow>
                     </TableHeader>
                     <TableBody>
                         {queueRows.map((row) => (
-                        <TableRow key={row.id} className={cn(selectedRows.includes(row.id) && "bg-muted")}>
-                            <TableCell>
-                                <Checkbox
-                                    checked={selectedRows.includes(row.id)}
-                                    onCheckedChange={() => {
-                                        setSelectedRows((prev) =>
-                                            prev.includes(row.id)
-                                                ? prev.filter((id) => id !== row.id)
-                                                : [...prev, row.id]
-                                        )
-                                    }}
-                                    aria-label={`Select ${row.folder}`}
-                                />
-                            </TableCell>
-                            <TableCell className="font-medium">{row.folder}</TableCell>
-                            <TableCell><Badge variant="default">{row.priority}</Badge></TableCell>
-                            <TableCell>
-                                <Select value={"none"}>
-                                    <SelectTrigger>
-                                        <SelectValue placeholder="Select Provider" />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                        <SelectItem value="none">None (auto storage-optimization)</SelectItem>
-                                        <SelectItem value="google">Google Drive</SelectItem>
-                                        <SelectItem value="microsoft">OneDrive</SelectItem>
-                                        <SelectItem value="dropbox">Dropbox</SelectItem>
-                                    </SelectContent>
-                                </Select>
-                            </TableCell>
-                            <TableCell>{row.nextSync}</TableCell>
+                        <TableRow key={row.id}>
+                            <TableCell className="font-medium">{row.folderPath ?? `Folder ${row.folderId}`}</TableCell>
+                            <TableCell>{getProviderDisplayName(row.provider)}</TableCell>
+                            <TableCell>{row.accountId}</TableCell>
+                            <TableCell>{row.pendingCount}</TableCell>
+                            <TableCell>{row.nextSyncAt ? new Date(row.nextSyncAt).toLocaleString() : "Due now"}</TableCell>
                             <TableCell className="text-right">
-                                <Button variant="ghost" size="sm">Sync Now</Button>
-                            </TableCell>
-                            <TableCell className="text-right">
-                                <Button
-                                    variant="ghost"
-                                    size="icon-sm"
-                                    aria-label={`Remove ${row.folder}`}
-                                    className="text-destructive hover:bg-destructive/10 hover:text-destructive"
-                                    onClick={() => setQueueRows((prev) => prev.filter((r) => r.id !== row.id))}
-                                >
-                                    <X className="size-4" />
+                                <Button variant="ghost" size="sm" onClick={() => void handleEventAction(triggerSync)}>
+                                    Sync Now
                                 </Button>
                             </TableCell>
                         </TableRow>
                         ))}
                     </TableBody>
                 </Table>
+
+                {eventsError && <p className="text-sm text-destructive">Unable to load current jobs: {eventsError.message}</p>}
             </div>
 
         </div>
