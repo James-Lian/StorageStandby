@@ -50,10 +50,7 @@ import { IgnoreRulesDialog } from "@/components/ignore-rules-dialog"
 import { addFolderCloud, fetchOpenExplorer, reconcileFolderIgnoreRules, removeFolderCloud, resyncFolder } from "@/api/data"
 import type { ConnectedAccount } from "@/api/accounts"
 
-
-// TODO: setIsIgnoreRulesOpen(true)
-const getFolderName = (folder: WatchedFolder) =>
-	folder.localPath?.split(/[\\/]/).filter(Boolean).pop() ?? "Unnamed folder"
+import { getFolderName, handleOpenExplorer } from "@/lib/utils"
 
 const getProblemLabel = (problem: number) => {
 	switch (problem) {
@@ -346,18 +343,6 @@ export function Folders() {
 	// -------------------------------
 	// Folder display information
 
-	const handleOpenExplorer = (path: string | null) => {
-		if (path) {
-			fetchOpenExplorer(path);
-		}
-		else {
-			notifyError({
-				title: "Path is null",
-				details: "Cannot open explorer; path variable is null"
-			})
-		}
-	}
-
 	const inFolderAssignedClouds = (folder: WatchedFolder, account: ConnectedAccount, provider: Providers) => {
 		if (folder.assignedClouds.find(cloud => cloud.accountId == account.id && cloud.provider == provider)) {
 			return true
@@ -595,7 +580,7 @@ export function Folders() {
 														if (event.ctrlKey) {
 															handleOpenExplorer(folder.localPath);
 														} else {
-															console.log("Hi")
+															
 														}
 													}}
 												>
@@ -678,7 +663,7 @@ export function Folders() {
 											</Button>
 										</DropdownMenuTrigger>
 										<DropdownMenuPortal>
-											<DropdownMenuContent>
+											<DropdownMenuContent align="end">
 												<DropdownMenuItem
 													onClick={() => {handleOpenExplorer(folder.localPath)}}
 												>

@@ -2,8 +2,8 @@ import { useEffect, useMemo, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { Pause, Play, RefreshCw } from "lucide-react"
-import { cn } from "@/lib/utils"
+import { Ellipsis, Pause, Play, RefreshCw } from "lucide-react"
+import { cn, getFolderName, handleOpenExplorer } from "@/lib/utils"
 import {
     pauseCurrentSync,
     fetchPendingSyncItems,
@@ -13,14 +13,19 @@ import {
 import { refreshSyncEvents, useSyncEvents } from "@/lib/sync-events"
 import { refreshWatchedFolders, useWatchedFolders } from "@/lib/watched-folders"
 import { getProviderDisplayName, type Providers } from "@/types/providers"
-import type { SyncEvent } from "@/types/data"
+import type { SyncEvent, WatchedFolder } from "@/types/data"
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
+import { useConnectedAccounts } from "@/lib/connected-accounts"
 
 type QueueRow = {
     id: string
+    folder: WatchedFolder
     folderId: number
-    folderPath: string | null | undefined
+    folderPath: string | null
     provider: Providers
     accountId: string
+    email: string | null
     pendingCount: number
     nextSyncAt: string | null
 }
@@ -37,6 +42,8 @@ export function Sync() {
     const [pendingItems, setPendingItems] = useState<Awaited<ReturnType<typeof fetchPendingSyncItems>>>([])
     const { events, error: eventsError } = useSyncEvents()
     const { folders } = useWatchedFolders()
+
+    const { accountsByProvider, counts } = useConnectedAccounts()
 
     useEffect(() => {
         void refreshSyncEvents()
@@ -83,10 +90,12 @@ export function Sync() {
             for (const destination of uniqueDestinations.values()) {
                 rows.push({
                     id: `${folderId}:${destination.provider}:${destination.accountId}`,
+                    folder,
                     folderId,
                     folderPath: folder.localPath,
                     provider: destination.provider,
                     accountId: destination.accountId,
+                    email: accountsByProvider[destination.provider].find(acc => acc.id == destination.accountId)?.email ?? null,
                     pendingCount,
                     nextSyncAt: folder.nextSyncAt,
                 })
@@ -268,7 +277,7 @@ export function Sync() {
                 <Table>
                     <TableHeader>
                         <TableRow>
-                            <TableHead>Folder Path</TableHead>
+                            <TableHead>Folder</TableHead>
                             <TableHead>Destination</TableHead>
                             <TableHead>Account</TableHead>
                             <TableHead>Pending Changes</TableHead>
@@ -279,15 +288,49 @@ export function Sync() {
                     <TableBody>
                         {queueRows.map((row) => (
                         <TableRow key={row.id}>
-                            <TableCell className="font-medium">{row.folderPath ?? `Folder ${row.folderId}`}</TableCell>
+                            <TableCell className="font-medium">
+                                <Tooltip>
+                                    <TooltipTrigger asChild>
+                                        <Button 
+                                            variant="link" 
+                                            className="cursor-pointer"
+                                            onClick={(event: React.MouseEvent<HTMLButtonElement>) => {
+                                                // check if Control key was held down
+                                                if (event.ctrlKey) {
+                                                    handleOpenExplorer(row.folderPath);
+                                                } else {
+                                                    
+                                                }
+                                            }}
+                                        >
+                                            {getFolderName(row.folder)}
+                                        </Button>
+                                    </TooltipTrigger>
+                                    <TooltipContent>
+                                        {row.folderPath ?? "No local path"}
+                                    </TooltipContent>
+                                </Tooltip>
+                            </TableCell>
                             <TableCell>{getProviderDisplayName(row.provider)}</TableCell>
-                            <TableCell>{row.accountId}</TableCell>
+                            <TableCell>{row.email}</TableCell>
                             <TableCell>{row.pendingCount}</TableCell>
                             <TableCell>{row.nextSyncAt ? new Date(row.nextSyncAt).toLocaleString() : "Due now"}</TableCell>
                             <TableCell className="text-right">
-                                <Button variant="ghost" size="sm" onClick={() => void handleEventAction(triggerSync)}>
-                                    Sync Now
-                                </Button>
+                                <DropdownMenu>
+                                    <DropdownMenuTrigger asChild>
+                                        <Button variant="ghost" size="sm">
+                                            <Ellipsis className="size-4" />
+                                        </Button>
+                                    </DropdownMenuTrigger>
+                                    <DropdownMenuContent align="end" className="w-72">
+                                        <DropdownMenuItem onSelect={() => void handleEventAction(triggerSync)}>
+                                            Sync Now
+                                        </DropdownMenuItem>
+                                        <DropdownMenuItem className="whitespace-normal">
+                                            Delete folder's tracked changes (applies to all clouds)
+                                        </DropdownMenuItem>
+                                    </DropdownMenuContent>
+                                </DropdownMenu>
                             </TableCell>
                         </TableRow>
                         ))}
