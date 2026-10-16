@@ -14,6 +14,8 @@ namespace StorageStandby.Backend.Core
         readonly BackupEngineState _state;
         readonly object _activeSyncLock = new();
         CancellationTokenSource? _activeSyncCancellation;
+
+        // Creates the service dependencies used to coordinate queue execution and cloud providers.
         public SynchronizationService(
             IServiceScopeFactory scopeFactory,
             WatchedFolderService watchedFolderService,
@@ -31,7 +33,7 @@ namespace StorageStandby.Backend.Core
         // ----------------------------------------------------------------------------------------------------
         // Sync & Queue Methods
 
-        // main logic method with sync cancellation logic
+        // Runs synchronization work while holding the single active-execution lease (cancellations occur here)
         public async Task ExecuteSyncQueue(
             CancellationToken cancellationToken = default,
             long? watchedFolderId = null,
@@ -73,6 +75,7 @@ namespace StorageStandby.Backend.Core
             }
         }
 
+        // Requests cancellation of the currently running provider operation, if one exists
         public bool PauseCurrentSync()
         {
             lock (_activeSyncLock)
@@ -87,6 +90,7 @@ namespace StorageStandby.Backend.Core
             }
         }
 
+        // Finds altered folders, processes assignment lifecycle work, and synchronizes destinations
         private async Task ExecuteSyncQueueCore(
             CancellationToken cancellationToken,
             long? watchedFolderId = null,
@@ -362,6 +366,7 @@ namespace StorageStandby.Backend.Core
 
         }
 
+        // Builds a full-folder upload queue for a newly assigned cloud destination
         private List<PendingSyncItem> BuildBootstrapQueue(WatchedFolder folder)
         {
             if (string.IsNullOrWhiteSpace(folder.LocalPath) || !Directory.Exists(folder.LocalPath))
@@ -394,6 +399,7 @@ namespace StorageStandby.Backend.Core
             return items;
         }
 
+        // Removes items already recorded as uploaded for one destination from the incremental queue
         private async Task<List<PendingSyncItem>> GetOutstandingQueueForCloudAsync(
             AppDbContext db,
             long watchedFolderId,
@@ -413,6 +419,7 @@ namespace StorageStandby.Backend.Core
             return queue.Where(item => !completed.Contains(item.Id)).ToList();
         }
 
+        // Loads the uploaded item IDs for each active destination to determine shared completion
         private async Task<List<HashSet<long>>> GetSuccessfulCloudsForItemsAsync(
             AppDbContext db,
             long watchedFolderId,
@@ -436,6 +443,7 @@ namespace StorageStandby.Backend.Core
             return results;
         }
 
+        // Parses the semicolon-delimited item ID format stored on sync events
         private static HashSet<long> ParseIds(string? value)
         {
             return (value ?? string.Empty)
@@ -445,6 +453,7 @@ namespace StorageStandby.Backend.Core
                 .ToHashSet();
         }
 
+        // Ensures the destination has a valid remote root folder before uploading
         private async Task ReconcileRemoteFolderAsync(
             AppDbContext db,
             WatchedFolder watchedFolder,
@@ -500,6 +509,7 @@ namespace StorageStandby.Backend.Core
             await db.SaveChangesAsync(cancellationToken);
         }
 
+        // Deletes queued remote assignments and removes local metadata only after success
         private async Task ProcessRemovingCloudsAsync(
             AppDbContext db,
             WatchedFolder watchedFolder,
@@ -555,6 +565,7 @@ namespace StorageStandby.Backend.Core
             }
         }
 
+        // Executes a queued destination through the Microsoft provider
         private async Task<SyncResult> ExecuteMicrosoftSyncAsync(
             SyncEvent syncEvent,
             IReadOnlyList<PendingSyncItem> queue,
@@ -570,6 +581,7 @@ namespace StorageStandby.Backend.Core
                 cancellationToken);
         }
 
+        // Executes a queued destination through the Google provider
         private async Task<SyncResult> ExecuteGoogleSyncAsync(
             SyncEvent syncEvent,
             IReadOnlyList<PendingSyncItem> queue,
@@ -585,6 +597,7 @@ namespace StorageStandby.Backend.Core
                 cancellationToken);
         }
 
+        // Executes a queued destination through the Dropbox provider
         private async Task<SyncResult> ExecuteDropboxSyncAsync(
             SyncEvent syncEvent,
             IReadOnlyList<PendingSyncItem> queue,
@@ -600,6 +613,7 @@ namespace StorageStandby.Backend.Core
                 cancellationToken);
         }
 
+        // Verifies that the destination has enough storage for the requested upload
         private async Task EnsureDestinationHasCapacityAsync(
             ProviderAccountCloud destination,
             IReadOnlyList<PendingSyncItem> queue,
@@ -644,6 +658,7 @@ namespace StorageStandby.Backend.Core
             }
         }
 
+        // Returns distinct cloud destinations that are configured for the folder
         public async Task<List<ProviderAccountCloud>> DetermineSyncDestinations(
             WatchedFolder folder,
             CancellationToken cancellationToken = default)
@@ -680,6 +695,7 @@ namespace StorageStandby.Backend.Core
         // 4. Remove ignored paths + update UntrackedPaths
         // 5. Load existing active queue items
         // 6. Update or create queue entries for existing files
+        // Rebuilds pending file work for a folder or a selected subtree without uploading immediately
         public async Task QueueResyncAsync(
             long watchedFolderId,
             string? localPath = null,
@@ -782,6 +798,7 @@ namespace StorageStandby.Backend.Core
             await db.SaveChangesAsync(cancellationToken);
         }
 
+        // Reconciles filesystem contents with the records tracked as untracked paths
         public async Task<List<UntrackedPath>> ReconcileUntrackedPathsAsync(
             long watchedFolderId,
             CancellationToken cancellationToken = default)
@@ -865,6 +882,7 @@ namespace StorageStandby.Backend.Core
                 .ToListAsync(cancellationToken);
         }
 
+        // Advances due folder schedules and runs normal work plus queued cloud removals
         public async Task ExecuteDueAutomaticSyncs(
             CancellationToken cancellationToken = default)
         {
@@ -916,6 +934,7 @@ namespace StorageStandby.Backend.Core
             }
         }
 
+        // Marks an upcoming event skipped and records any additional folder-level skips
         public async Task SkipSyncEvent(
             long syncEventId,
             int additionalSyncsToSkip,
@@ -945,6 +964,7 @@ namespace StorageStandby.Backend.Core
             await db.SaveChangesAsync(cancellationToken);
         }
 
+        // Moves an upcoming event into a postponed state until its requested time
         public async Task PostponeSyncEvent(
             long syncEventId,
             DateTime scheduledTimestamp,
@@ -965,6 +985,7 @@ namespace StorageStandby.Backend.Core
             await db.SaveChangesAsync(cancellationToken);
         }
 
+        // Makes a postponed event eligible to run immediately
         public async Task ResumeSyncEvent(
             long syncEventId,
             CancellationToken cancellationToken = default)
@@ -984,6 +1005,7 @@ namespace StorageStandby.Backend.Core
             await db.SaveChangesAsync(cancellationToken);
         }
 
+        // Calculates the next occurrence from a folder's persisted frequency settings
         private static DateTime? GetNextSyncAt(DateTime fromUtc, SyncFrequency frequency)
         {
             if (frequency.SyncIncrements == SyncIncrements.Inactive || frequency.Multiplier < 1)
@@ -1001,6 +1023,7 @@ namespace StorageStandby.Backend.Core
             };
         }
 
+        // Calculates the next configured weekly occurrence
         private static DateTime GetNextWeeklyOccurrence(
             DateTime fromUtc,
             SyncFrequency frequency,
@@ -1028,6 +1051,7 @@ namespace StorageStandby.Backend.Core
             return fromUtc.AddDays(7 * multiplier);
         }
 
+        // Calculates the next configured monthly occurrence, ignoring invalid month days
         private static DateTime GetNextMonthlyOccurrence(
             DateTime fromUtc,
             SyncFrequency frequency,
@@ -1056,7 +1080,7 @@ namespace StorageStandby.Backend.Core
             return fromUtc.AddMonths(multiplier);
         }
 
-        // Remove a pending request or an established assignment.
+        // Queues a pending assignment cancellation or an established cloud removal
         public async Task RemoveFromAssignedCloud(
             WatchedFolder folder,
             Providers provider,
@@ -1095,7 +1119,7 @@ namespace StorageStandby.Backend.Core
             await db.SaveChangesAsync(cancellationToken);
         }
 
-        // Add a durable user request. The assignment is promoted after bootstrap succeeds.
+        // Adds a durable user assignment request that is promoted after bootstrap succeeds
         public async Task AddToUserAssignedCloud(
             WatchedFolder folder,
             Providers provider,
