@@ -2,11 +2,12 @@ import { useEffect, useMemo, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { Ellipsis, Pause, Play, RefreshCw } from "lucide-react"
+import { Ellipsis, Pause, Play, RefreshCw, Trash2 } from "lucide-react"
 import { cn, getFolderName, handleOpenExplorer } from "@/lib/utils"
 import {
     pauseCurrentSync,
     fetchPendingSyncItems,
+    removeFolderCloud,
     setSyncPaused,
     triggerSync,
 } from "@/api/data"
@@ -30,6 +31,15 @@ type QueueRow = {
     nextSyncAt: string | null
 }
 
+type CloudAssignmentRow = {
+    id: string
+    folder: WatchedFolder
+    provider: Providers
+    accountId: string
+    state: number
+    lastError: string | null
+}
+
 export function Sync() {
 
     // Feature: sync scheduling option (automatic or manual)
@@ -43,7 +53,7 @@ export function Sync() {
     const { events, error: eventsError } = useSyncEvents()
     const { folders } = useWatchedFolders()
 
-    const { accountsByProvider, counts } = useConnectedAccounts()
+    const { accountsByProvider } = useConnectedAccounts()
 
     useEffect(() => {
         void refreshSyncEvents()
@@ -76,9 +86,8 @@ export function Sync() {
 
             const destinations = [
                 ...folder.assignedClouds
-                    .filter((cloud) => cloud.state !== 4 && cloud.state !== 5)
+                    .filter((cloud) => cloud.state === 2)
                     .map((cloud) => ({ provider: cloud.provider, accountId: cloud.accountId })),
-                ...folder.userAssignedClouds.map((cloud) => ({ provider: cloud.provider, accountId: cloud.accountId })),
             ]
             const uniqueDestinations = new Map(
                 destinations.map((destination) => [
@@ -113,6 +122,39 @@ export function Sync() {
             .map((event) => ({ event, folder: foldersById.get(event.watchedFolderId) }))
     }, [events, folders])
 
+    const assignmentRows = useMemo<CloudAssignmentRow[]>(() => {
+        const rows: CloudAssignmentRow[] = []
+        for (const folder of folders) {
+            const metadataKeys = new Set<string>()
+            for (const cloud of folder.assignedClouds) {
+                const key = `${folder.id}:${cloud.provider}:${cloud.accountId.toLowerCase()}`
+                metadataKeys.add(key)
+                rows.push({
+                    id: key,
+                    folder,
+                    provider: cloud.provider,
+                    accountId: cloud.accountId,
+                    state: cloud.state,
+                    lastError: cloud.lastError,
+                })
+            }
+
+            for (const cloud of folder.userAssignedClouds) {
+                const key = `${folder.id}:${cloud.provider}:${cloud.accountId.toLowerCase()}`
+                if (metadataKeys.has(key)) continue
+                rows.push({
+                    id: key,
+                    folder,
+                    provider: cloud.provider,
+                    accountId: cloud.accountId,
+                    state: 0,
+                    lastError: null,
+                })
+            }
+        }
+        return rows
+    }, [folders])
+
     const refreshQueue = async () => {
         await refreshSyncEvents()
         const refreshedPendingItems = await fetchPendingSyncItems()
@@ -130,6 +172,18 @@ export function Sync() {
 
     const getFolderLabel = (event: SyncEvent, localPath: string | null | undefined) =>
         localPath ?? `Folder ${event.watchedFolderId}`
+
+    const getAssignmentStatus = (state: number) => {
+        switch (state) {
+            case 0: return "Queued"
+            case 1: return "Bootstrapping"
+            case 2: return "Active"
+            case 3: return "Failed"
+            case 4: return "Removing"
+            case 5: return "Unlinked"
+            default: return "Unknown"
+        }
+    }
 
     return (
         <div className="space-y-6 p-4">
@@ -264,12 +318,75 @@ export function Sync() {
                 )}
             </div>
 
+            <div className="rounded-2xl border border-border bg-background p-4 space-y-4">
+                <div className="flex items-center justify-between">
+                    <div>
+                        <h2 className="text-lg font-semibold">Cloud Assignments</h2>
+                        <p className="text-sm text-muted-foreground">Uploading watched folders to new remote locations.</p>
+                    </div>
+                    <Badge variant="outline">{assignmentRows.length} Assigned</Badge>
+                </div>
+
+                {assignmentRows.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">No cloud assignments.</p>
+                ) : (
+                    <Table>
+                        <TableHeader>
+                            <TableRow>
+                                <TableHead>Folder</TableHead>
+                                <TableHead>Provider</TableHead>
+                                <TableHead>Account</TableHead>
+                                <TableHead>Status</TableHead>
+                                <TableHead className="text-right">Actions</TableHead>
+                            </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                            {assignmentRows.map((row) => {
+                                const email = accountsByProvider[row.provider]
+                                    ?.find((account) => account.id.toLowerCase() === row.accountId.toLowerCase())
+                                    ?.email ?? row.accountId
+                                return (
+                                    <TableRow key={row.id}>
+                                        <TableCell className="font-medium">{getFolderName(row.folder)}</TableCell>
+                                        <TableCell>{getProviderDisplayName(row.provider)}</TableCell>
+                                        <TableCell>{email}</TableCell>
+                                        <TableCell>
+                                            <Badge variant={row.state === 3 ? "destructive" : row.state === 2 ? "default" : "outline"}>
+                                                {getAssignmentStatus(row.state)}
+                                            </Badge>
+                                            {row.lastError && <p className="mt-1 text-xs text-destructive">{row.lastError}</p>}
+                                        </TableCell>
+                                        <TableCell className="text-right">
+                                            <Button
+                                                variant="ghost"
+                                                size="sm"
+                                                disabled={row.state === 4}
+                                                onClick={() => void handleEventAction(async () => {
+                                                    await removeFolderCloud(row.folder.id, {
+                                                        provider: row.provider,
+                                                        accountId: row.accountId,
+                                                    })
+                                                    await refreshWatchedFolders()
+                                                })}
+                                            >
+                                                <Trash2 className="mr-2 size-4" />
+                                                {row.state === 0 ? "Cancel" : "Queue removal"}
+                                            </Button>
+                                        </TableCell>
+                                    </TableRow>
+                                )
+                            })}
+                        </TableBody>
+                    </Table>
+                )}
+            </div>
+
             {/* Upcoming & queued events */}
             <div className="rounded-2xl border border-border bg-background p-4 space-y-4">
                 <div className="flex items-center justify-between">
                     <div>
                         <h2 className="text-lg font-semibold">Upcoming Sync Queue</h2>
-                        <p className="text-sm text-muted-foreground">Pending synchronization operations ordered by priority.</p>
+                        <p className="text-sm text-muted-foreground">Updating existing remote locations with synchronization operations.</p>
                     </div>
                     <Badge variant="outline">{queueRows.length} Queued</Badge>
                 </div>
@@ -277,7 +394,7 @@ export function Sync() {
                 <Table>
                     <TableHeader>
                         <TableRow>
-                            <TableHead>Folder</TableHead>
+                            <TableHead className="pl-4">Folder</TableHead>
                             <TableHead>Destination</TableHead>
                             <TableHead>Account</TableHead>
                             <TableHead>Pending Changes</TableHead>
@@ -286,6 +403,13 @@ export function Sync() {
                         </TableRow>
                     </TableHeader>
                     <TableBody>
+                        {queueRows.length == 0 && 
+                            <TableRow>
+                                <TableCell colSpan={5} className="text-center py-6">
+                                    <p className="text-sm text-muted-foreground">Assign clouds to a folder to see pending sync operations!</p>
+                                </TableCell>
+                            </TableRow>
+                        }
                         {queueRows.map((row) => (
                         <TableRow key={row.id}>
                             <TableCell className="font-medium">

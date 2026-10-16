@@ -188,7 +188,7 @@ export function IgnoreRulesDialog({
                                         draft.map((rule, index) => {
                                             const valid = isValidRulePath(rule)
                                             return (
-                                                <TableRow key={`${index}-${rule}`}>
+                                                <TableRow key={index}>
                                                     <TableCell className="font-medium">
                                                         <Tooltip>
                                                             <TooltipTrigger asChild>
