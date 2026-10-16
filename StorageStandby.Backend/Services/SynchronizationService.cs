@@ -105,7 +105,8 @@ namespace StorageStandby.Backend.Core
                     .Select(cloud => cloud.WatchedFolderId))
                 .Union(db.WatchedFolderCloudMetadata
                     .Where(cloud => cloud.State == CloudAssignmentState.PendingBootstrap
-                        || cloud.State == CloudAssignmentState.Failed)
+                        || cloud.State == CloudAssignmentState.Failed
+                        || cloud.State == CloudAssignmentState.Removing)
                     .Select(cloud => cloud.WatchedFolderId))
                 .Distinct()
                 .ToListAsync(cancellationToken);
@@ -141,7 +142,13 @@ namespace StorageStandby.Backend.Core
                     .Include(folder => folder.AssignedClouds)
                     .Include(folder => folder.UserAssignedClouds)
                     .SingleOrDefaultAsync(folder => folder.Id == id, cancellationToken);
-                if (watchedFolder is null || string.IsNullOrWhiteSpace(watchedFolder.LocalPath))
+                if (watchedFolder is null)
+                {
+                    continue;
+                }
+
+                await ProcessRemovingCloudsAsync(db, watchedFolder, cancellationToken);
+                if (string.IsNullOrWhiteSpace(watchedFolder.LocalPath))
                 {
                     continue;
                 }
@@ -181,6 +188,11 @@ namespace StorageStandby.Backend.Core
                     var metadata = watchedFolder.AssignedClouds.SingleOrDefault(cloud =>
                         cloud.Provider == destination.Provider
                         && string.Equals(cloud.AccountId, destination.AccountId, StringComparison.OrdinalIgnoreCase));
+                    if (metadata?.State is CloudAssignmentState.Removing or CloudAssignmentState.Unlinked)
+                    {
+                        continue;
+                    }
+
                     if (metadata is null)
                     {
                         metadata = new WatchedFolderCloudMetadata
@@ -486,6 +498,61 @@ namespace StorageStandby.Backend.Core
             };
             cloud.State = CloudAssignmentState.Bootstrapping;
             await db.SaveChangesAsync(cancellationToken);
+        }
+
+        private async Task ProcessRemovingCloudsAsync(
+            AppDbContext db,
+            WatchedFolder watchedFolder,
+            CancellationToken cancellationToken)
+        {
+            var removingClouds = watchedFolder.AssignedClouds
+                .Where(cloud => cloud.State == CloudAssignmentState.Removing)
+                .ToList();
+            await using var providerScope = _scopeFactory.CreateAsyncScope();
+
+            foreach (var cloud in removingClouds)
+            {
+                try
+                {
+                    if (!string.IsNullOrWhiteSpace(cloud.RemoteFolderId))
+                    {
+                        switch (cloud.Provider)
+                        {
+                            case Providers.Google:
+                                await providerScope.ServiceProvider
+                                    .GetRequiredService<GoogleDriveProvider>()
+                                    .DeleteRemoteRootFolderAsync(cloud.AccountId, cloud.RemoteFolderId, cancellationToken);
+                                break;
+                            case Providers.Microsoft:
+                                await providerScope.ServiceProvider
+                                    .GetRequiredService<OneDriveProvider>()
+                                    .DeleteRemoteRootFolderAsync(cloud.AccountId, cloud.RemoteFolderId, cancellationToken);
+                                break;
+                            case Providers.Dropbox:
+                                await providerScope.ServiceProvider
+                                    .GetRequiredService<DropboxProvider>()
+                                    .DeleteRemoteRootFolderAsync(cloud.AccountId, cloud.RemoteFolderId, cancellationToken);
+                                break;
+                            default:
+                                throw new NotSupportedException(
+                                    $"Removing an assigned cloud is not implemented for {cloud.Provider}.");
+                        }
+                    }
+
+                    db.WatchedFolderCloudMetadata.Remove(cloud);
+                    await db.SaveChangesAsync(cancellationToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    cloud.State = CloudAssignmentState.Removing;
+                    cloud.LastError = ex.Message;
+                    await db.SaveChangesAsync(cancellationToken);
+                }
+            }
         }
 
         private async Task<SyncResult> ExecuteMicrosoftSyncAsync(
@@ -813,6 +880,11 @@ namespace StorageStandby.Backend.Core
             }
 
             DateTime now = DateTime.UtcNow;
+            var removingFolderIds = await db.WatchedFolderCloudMetadata
+                .Where(cloud => cloud.State == CloudAssignmentState.Removing)
+                .Select(cloud => cloud.WatchedFolderId)
+                .Distinct()
+                .ToListAsync(cancellationToken);
             var dueFolders = (await db.WatchedFolders
                 .Where(folder => folder.NextSyncAt == null || folder.NextSyncAt <= now)
                 .ToListAsync(cancellationToken))
@@ -833,9 +905,14 @@ namespace StorageStandby.Backend.Core
             }
 
             await db.SaveChangesAsync(cancellationToken);
-            foreach (var folder in foldersToRun)
+            var folderIdsToRun = foldersToRun
+                .Select(folder => folder.Id)
+                .Concat(removingFolderIds)
+                .Distinct()
+                .ToList();
+            foreach (var folderId in folderIdsToRun)
             {
-                await ExecuteSyncQueue(cancellationToken, folder.Id);
+                await ExecuteSyncQueue(cancellationToken, folderId);
             }
         }
 
@@ -998,50 +1075,24 @@ namespace StorageStandby.Backend.Core
                     && cloud.AccountId == accountId,
                     cancellationToken);
 
-            var requestedAssignment = await db.WatchedFolderUserCloudAssignments
-                .SingleOrDefaultAsync(item =>
-                    item.WatchedFolderId == folder.Id
-                    && item.Provider == provider
-                    && item.AccountId == accountId,
-                    cancellationToken);
-            if (requestedAssignment is not null)
-            {
-                db.WatchedFolderUserCloudAssignments.Remove(requestedAssignment);
-            }
-
             if (cloudMetadataToRemove is null)
             {
-                await db.SaveChangesAsync(cancellationToken);
+                await db.WatchedFolderUserCloudAssignments
+                    .Where(item => item.WatchedFolderId == folder.Id
+                        && item.Provider == provider
+                        && item.AccountId == accountId)
+                    .ExecuteDeleteAsync(cancellationToken);
                 return;
             }
 
-            if (!string.IsNullOrWhiteSpace(cloudMetadataToRemove.RemoteFolderId))
-            {
-                switch (provider)
-                {
-                    case Providers.Google:
-                        await scope.ServiceProvider.GetRequiredService<GoogleDriveProvider>()
-                            .DeleteRemoteRootFolderAsync(accountId, cloudMetadataToRemove.RemoteFolderId, cancellationToken);
-                        break;
-                    case Providers.Microsoft:
-                        await scope.ServiceProvider.GetRequiredService<OneDriveProvider>()
-                            .DeleteRemoteRootFolderAsync(accountId, cloudMetadataToRemove.RemoteFolderId, cancellationToken);
-                        break;
-                    case Providers.Dropbox:
-                        await scope.ServiceProvider.GetRequiredService<DropboxProvider>()
-                            .DeleteRemoteRootFolderAsync(accountId, cloudMetadataToRemove.RemoteFolderId, cancellationToken);
-                        break;
-                    default:
-                        throw new NotSupportedException(
-                            $"Removing an assigned cloud is not implemented for {provider}.");
-                }
-            }
-
-            db.WatchedFolderCloudMetadata.Remove(cloudMetadataToRemove);
+            await db.WatchedFolderUserCloudAssignments
+                .Where(item => item.WatchedFolderId == folder.Id
+                    && item.Provider == provider
+                    && item.AccountId == accountId)
+                .ExecuteDeleteAsync(cancellationToken);
+            cloudMetadataToRemove.State = CloudAssignmentState.Removing;
+            cloudMetadataToRemove.LastError = null;
             await db.SaveChangesAsync(cancellationToken);
-
-            folder.AssignedClouds.RemoveAll(cloud =>
-                cloud.Provider == provider && cloud.AccountId == accountId);
         }
 
         // Add a durable user request. The assignment is promoted after bootstrap succeeds.
