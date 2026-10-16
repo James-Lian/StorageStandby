@@ -1,7 +1,6 @@
-import { logError } from "@/lib/notifications";
 import { logApiProblemDetailsError, readErrorDetails } from "@/lib/read-errors-utils";
 import { ErrorHandlingWrapper } from "./errorhandling";
-import type { SyncEvent, SystemSettings, WatchedFolder } from "@/types/data";
+import type { PendingSyncItem, SyncEvent, SystemSettings, WatchedFolder } from "@/types/data";
 
 // ---------------------------------------------------------------------------
 // WATCHED FOLDERS
@@ -153,6 +152,110 @@ export async function fetchSyncEvents(fName: string = "fetchSyncEvents"): Promis
             throw new Error(`${fName}: Failed to fetch sync events`);
         }
         return await response.json() as SyncEvent[];
+    });
+}
+
+export async function fetchPendingSyncItems(fName: string = "fetchPendingSyncItems"): Promise<PendingSyncItem[]> {
+    return ErrorHandlingWrapper(fName, async () => {
+        const response = await fetch(`http://storagestandby.local/api/sync/pending`);
+        if (!response.ok) {
+            throw new Error(`${fName}: Failed to fetch pending sync items`);
+        }
+        return await response.json() as PendingSyncItem[];
+    });
+}
+
+export async function triggerSync(fName: string = "triggerSync"): Promise<void> {
+    return ErrorHandlingWrapper(fName, async () => {
+        const response = await fetch(`http://storagestandby.local/api/sync/trigger`, { method: "POST" });
+        if (!response.ok) {
+            throw new Error(`${fName}: Failed to trigger sync`);
+        }
+    });
+}
+
+export async function setSyncPaused(
+    paused: boolean,
+    fName: string = "setSyncPaused",
+): Promise<void> {
+    return ErrorHandlingWrapper(fName, async () => {
+        const response = await fetch(`http://storagestandby.local/api/sync/pause`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(paused),
+        });
+        if (!response.ok) {
+            throw new Error(`${fName}: Failed to update sync pause state`);
+        }
+    });
+}
+
+export async function pauseCurrentSync(fName: string = "pauseCurrentSync"): Promise<boolean> {
+    return ErrorHandlingWrapper(fName, async () => {
+        const response = await fetch(`http://storagestandby.local/api/sync/current/pause`, { method: "POST" });
+        if (!response.ok) {
+            throw new Error(`${fName}: Failed to pause current sync`);
+        }
+        const result = await response.json() as { paused: boolean };
+        return result.paused;
+    });
+}
+
+export async function syncEventNow(
+    eventId: number,
+    fName: string = "syncEventNow",
+): Promise<void> {
+    return ErrorHandlingWrapper(fName, async () => {
+        const response = await fetch(`http://storagestandby.local/api/syncevents/${eventId}/sync-now`, { method: "POST" });
+        if (!response.ok) {
+            throw new Error(`${fName}: Failed to sync event`);
+        }
+    });
+}
+
+export async function skipSyncEvent(
+    eventId: number,
+    additionalSyncsToSkip: number,
+    fName: string = "skipSyncEvent",
+): Promise<void> {
+    return ErrorHandlingWrapper(fName, async () => {
+        const response = await fetch(`http://storagestandby.local/api/syncevents/${eventId}/skip`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ additionalSyncsToSkip }),
+        });
+        if (!response.ok) {
+            throw new Error(`${fName}: Failed to skip event`);
+        }
+    });
+}
+
+export async function postponeSyncEvent(
+    eventId: number,
+    scheduledTimestamp: string,
+    fName: string = "postponeSyncEvent",
+): Promise<void> {
+    return ErrorHandlingWrapper(fName, async () => {
+        const response = await fetch(`http://storagestandby.local/api/syncevents/${eventId}/postpone`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ scheduledTimestamp }),
+        });
+        if (!response.ok) {
+            throw new Error(`${fName}: Failed to postpone event`);
+        }
+    });
+}
+
+export async function resumeSyncEvent(
+    eventId: number,
+    fName: string = "resumeSyncEvent",
+): Promise<void> {
+    return ErrorHandlingWrapper(fName, async () => {
+        const response = await fetch(`http://storagestandby.local/api/syncevents/${eventId}/resume`, { method: "POST" });
+        if (!response.ok) {
+            throw new Error(`${fName}: Failed to resume event`);
+        }
     });
 }
 

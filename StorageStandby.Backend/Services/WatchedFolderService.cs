@@ -230,7 +230,7 @@ namespace StorageStandby.Backend.Services
             string oldPrefix = oldPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
                 + Path.DirectorySeparatorChar;
             var pendingItems = await db.PendingSyncQueue
-                .Where(item => item.WatchedFolderId == watchedFolderId && !item.IsTerminal())
+                .Where(item => item.WatchedFolderId == watchedFolderId && !item.Deleted)
                 .ToListAsync(cancellationToken);
             foreach (var item in pendingItems)
             {
@@ -374,7 +374,7 @@ namespace StorageStandby.Backend.Services
                 .ToListAsync(stoppingToken);
 
             var activeItems = existingItems
-                .Where(item => !item.IsTerminal())
+                .Where(item => !item.Deleted)
                 .GroupBy(item => item.LocalPath, StringComparer.OrdinalIgnoreCase)
                 .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
 

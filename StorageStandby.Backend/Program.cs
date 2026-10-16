@@ -13,6 +13,9 @@ using StorageStandby.Backend.Models;
 using StorageStandby.Backend.Services;
 using StorageStandby.Backend.Workers;
 using System.Linq;
+using System.Diagnostics;
+using System.Runtime.InteropServices;
+
 
 // Backend ASP.NET Core C# project
 // Uses built-in web server (Kestrel) to listen to a local pipe instead of an open network port
@@ -163,6 +166,26 @@ app.MapMethods("/api/{**path}", new[] { "OPTIONS" }, () => Results.NoContent());
 //    Instance = "/api/auth/google/revoke"
 //};
 
+
+app.MapPost("/api/open-url", (OpenUrlRequest request) => {
+    try {
+        if (!Uri.TryCreate(request.url, UriKind.Absolute, out var uri) ||
+            (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+        {
+            return Results.BadRequest("Only absolute HTTP and HTTPS URLs can be opened.");
+        }
+
+        Process.Start(new ProcessStartInfo
+        {
+            FileName = uri.ToString(),
+            UseShellExecute = true
+        });
+
+        return Results.Ok();
+    } catch (Exception error) {
+        return Results.Problem(detail: $"Failed to open {request.url} in default browser: " + error.Message, statusCode: 500);
+    }
+});
 
 // GET: React polling for dashboard telemetry
 app.MapGet("/api/status", (BackupEngineState state) => Results.Ok(new
@@ -489,6 +512,28 @@ app.MapGet("/api/syncevents", async (AppDbContext db) =>
     return Results.Ok(eventsByMostRecent);
 });
 
+// DB: PENDING FILE CHANGES
+app.MapGet("/api/sync/pending", async (AppDbContext db, CancellationToken cancellationToken) =>
+{
+    var pendingItems = await db.PendingSyncQueue
+        .Where(item => !item.Deleted)
+        .OrderBy(item => item.WatchedFolderId)
+        .ThenBy(item => item.LocalPath)
+        .Select(item => new
+        {
+            item.Id,
+            item.WatchedFolderId,
+            item.LocalPath,
+            item.IsFolder,
+            item.Created,
+            item.Changed,
+            item.Renamed,
+            item.Moved
+        })
+        .ToListAsync(cancellationToken);
+    return Results.Ok(pendingItems);
+});
+
 // -------------------------------------------------------------------
 // (!!) AUTH-RELATED REST API ENDPOINTS (!!)
 // -------------------------------------------------------------------
@@ -662,6 +707,7 @@ await app.RunAsync();
 // TYPES
 // -------------------------------------------------------------------
 
+public record OpenUrlRequest(string url);
 public record IgnoreRulesChangeRequest(string OldIgnoreRules, string NewIgnoreRules);
 public record OpenExplorerRequest(string LocalPath);
 public record SkipSyncRequest(int AdditionalSyncsToSkip = 0);
