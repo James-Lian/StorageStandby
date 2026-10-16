@@ -15,6 +15,7 @@ using StorageStandby.Backend.Workers;
 using System.Linq;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using Microsoft.VisualBasic;
 
 
 // Backend ASP.NET Core C# project
@@ -166,27 +167,6 @@ app.MapMethods("/api/{**path}", new[] { "OPTIONS" }, () => Results.NoContent());
 //    Instance = "/api/auth/google/revoke"
 //};
 
-
-app.MapPost("/api/open-url", (OpenUrlRequest request) => {
-    try {
-        if (!Uri.TryCreate(request.url, UriKind.Absolute, out var uri) ||
-            (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
-        {
-            return Results.BadRequest("Only absolute HTTP and HTTPS URLs can be opened.");
-        }
-
-        Process.Start(new ProcessStartInfo
-        {
-            FileName = uri.ToString(),
-            UseShellExecute = true
-        });
-
-        return Results.Ok();
-    } catch (Exception error) {
-        return Results.Problem(detail: $"Failed to open {request.url} in default browser: " + error.Message, statusCode: 500);
-    }
-});
-
 // GET: React polling for dashboard telemetry
 app.MapGet("/api/status", (BackupEngineState state) => Results.Ok(new
 {
@@ -275,6 +255,33 @@ app.MapPost("/api/syncevents/{syncEventId:long}/resume", async (
 // -------------------------------------------------------------------
 // (!!) LOCAL FILESYSTEM REST API ENDPOINTS (!!)
 // -------------------------------------------------------------------
+
+app.MapPost("/api/open-url", (OpenUrlRequest request) => {
+    try {
+        if (!Uri.TryCreate(request.url, UriKind.Absolute, out var uri) ||
+            (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+        {
+            return Results.BadRequest("Only absolute HTTP and HTTPS URLs can be opened.");
+        }
+
+        Process.Start(new ProcessStartInfo
+        {
+            FileName = uri.ToString(),
+            UseShellExecute = true
+        });
+
+        return Results.Ok();
+    } catch (Exception error) {
+        return Results.Problem(detail: $"Failed to open {request.url} in default browser: " + error.Message, statusCode: 500);
+    }
+});
+
+app.MapGet("/api/fileSystem/builddirectorytree/{path}", (
+    string path,
+    LocalFileSystemService fileSystem
+) => {
+    return fileSystem.BuildDirectoryTree(path);
+});
 
 app.MapGet("/api/fileSystem/getsize/{localPath}", (
     string localPath,
