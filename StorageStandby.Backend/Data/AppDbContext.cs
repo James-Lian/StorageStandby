@@ -11,6 +11,7 @@ namespace StorageStandby.Backend.Data
         public DbSet<WatchedFolder> WatchedFolders { get; set; }
         public DbSet<WatchedFolderCloudMetadata> WatchedFolderCloudMetadata { get; set; }
         public DbSet<WatchedFolderUserCloudAssignment> WatchedFolderUserCloudAssignments { get; set; }
+            public DbSet<WatchedFolderUserCloudRemovalAssignment> WatchedFolderUserCloudRemovalAssignments { get; set; }
         public DbSet<CloudToken> CloudTokens { get; set; }
         public DbSet<SystemSettings> SystemSettings { get; set; }
 
@@ -69,6 +70,16 @@ namespace StorageStandby.Backend.Data
             modelBuilder.Entity<WatchedFolderUserCloudAssignment>()
                 .HasOne<WatchedFolder>()
                 .WithMany(folder => folder.UserAssignedClouds)
+                .HasForeignKey(item => item.WatchedFolderId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            modelBuilder.Entity<WatchedFolderUserCloudRemovalAssignment>()
+                .HasIndex(item => new { item.WatchedFolderId, item.Provider, item.AccountId })
+                .IsUnique();
+
+            modelBuilder.Entity<WatchedFolderUserCloudRemovalAssignment>()
+                .HasOne<WatchedFolder>()
+                .WithMany(folder => folder.UserCloudRemovalAssignments)
                 .HasForeignKey(item => item.WatchedFolderId)
                 .OnDelete(DeleteBehavior.Cascade);
         }

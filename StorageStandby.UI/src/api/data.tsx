@@ -179,11 +179,7 @@ export async function setSyncPaused(
     fName: string = "setSyncPaused",
 ): Promise<void> {
     return ErrorHandlingWrapper(fName, async () => {
-        const response = await fetch(`http://storagestandby.local/api/sync/pause`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(paused),
-        });
+        const response = await fetch(`http://storagestandby.local/api/sync/pause/${paused}`, { method: "POST" });
         if (!response.ok) {
             throw new Error(`${fName}: Failed to update sync pause state`);
         }
@@ -298,5 +294,21 @@ export async function fetchDirectoryTree(
             throw new Error(`${fName}: Failed to build directory tree`)
         }
         return await response.json() as DirectoryNode | null
+    })
+}
+
+export async function triggerCloudAssignmentSync(
+    folderId: number,
+    cloud: { provider: number; accountId: string },
+    fName: string = "triggerCloudAssignmentSync",
+): Promise<void> {
+    return ErrorHandlingWrapper(fName, async () => {
+        const response = await fetch(
+            `http://storagestandby.local/api/sync/trigger/${folderId}/${cloud.provider}/${encodeURIComponent(cloud.accountId)}`,
+            { method: "POST" },
+        )
+        if (!response.ok) {
+            throw new Error(`${fName}: Failed to execute cloud assignment`)
+        }
     })
 }

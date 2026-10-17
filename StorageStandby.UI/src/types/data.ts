@@ -5,6 +5,7 @@ export type WatchedFolder = {
     localPath: string | null
     assignedClouds: WatchedFolderCloudMetadata[]
     userAssignedClouds: WatchedFolderUserCloudAssignment[]
+    userCloudRemovalAssignments: WatchedFolderUserCloudRemovalAssignment[]
     ignoreRules: string
     trackSnapshots: boolean
     snapshotUrls: string
@@ -41,6 +42,13 @@ export type WatchedFolderCloudMetadata = {
 }
 
 export type WatchedFolderUserCloudAssignment = {
+    id: number
+    watchedFolderId: number
+    provider: Providers
+    accountId: string
+}
+
+export type WatchedFolderUserCloudRemovalAssignment = {
     id: number
     watchedFolderId: number
     provider: Providers

@@ -35,6 +35,7 @@ namespace StorageStandby.Backend.Models
         // Cloud/Provider Information
         public List<WatchedFolderCloudMetadata> AssignedClouds { get; private set; } = [];
         public List<WatchedFolderUserCloudAssignment> UserAssignedClouds { get; private set; } = [];
+        public List<WatchedFolderUserCloudRemovalAssignment> UserCloudRemovalAssignments { get; private set; } = [];
 
         // ---------------------------------------------------------------
         // Folder/File specific settings
@@ -124,6 +125,13 @@ namespace StorageStandby.Backend.Models
     }
 
     public class WatchedFolderUserCloudAssignment
+    {
+        public long Id { get; set; }
+        public long WatchedFolderId { get; set; }
+        public Providers Provider { get; set; }
+        public string AccountId { get; set; } = string.Empty;
+    }
+    public class WatchedFolderUserCloudRemovalAssignment
     {
         public long Id { get; set; }
         public long WatchedFolderId { get; set; }
