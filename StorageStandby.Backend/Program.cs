@@ -112,6 +112,7 @@ using (var scope = app.Services.CreateScope())
     try
     {
         await db.Database.MigrateAsync(); // Applies pending migrations auto
+        state.LoadSyncPauseFromDb();
     }
     catch (Exception ex)
     {
@@ -179,7 +180,7 @@ app.MapGet("/api/status", (BackupEngineState state) => Results.Ok(new
 }));
 
 // POST: React toggling the pause button
-app.MapPost("/api/sync/pause", (bool pauseState, BackupEngineState state) =>
+app.MapPost("/api/sync/pause/{pauseState:bool}", (bool pauseState, BackupEngineState state) =>
 {
     state.SetSyncPause(pauseState);
     state.Status = pauseState ? "Paused" : "Running";
@@ -200,6 +201,21 @@ app.MapPost("/api/sync/trigger", async (
 {
     await synchronizationService.ExecuteSyncQueue(cancellationToken);
     return Results.Ok(new { Message = "Sync completed or recorded unfinished work." });
+});
+
+app.MapPost("/api/sync/trigger/{watchedFolderId:long}/{provider}/{accountId}", async (
+    long watchedFolderId,
+    Providers provider,
+    string accountId,
+    SynchronizationService synchronizationService,
+    CancellationToken cancellationToken) =>
+{
+    await synchronizationService.ExecuteSyncQueue(
+        cancellationToken,
+        watchedFolderId,
+        provider,
+        accountId);
+    return Results.Ok(new { Message = "Cloud assignment executed." });
 });
 
 // Sync a SyncEvent now
@@ -329,6 +345,7 @@ app.MapGet("/api/folders", (AppDbContext db) =>
     var folders = db.WatchedFolders
         .Include(folder => folder.AssignedClouds)
         .Include(folder => folder.UserAssignedClouds)
+        .Include(folder => folder.UserCloudRemovalAssignments)
         .ToList();
     return Results.Ok(folders);
 });
@@ -341,6 +358,7 @@ app.MapGet("/api/folders/{localPath}", async (
     var folder = await db.WatchedFolders
         .Include(item => item.AssignedClouds)
         .Include(item => item.UserAssignedClouds)
+        .Include(item => item.UserCloudRemovalAssignments)
         .FirstOrDefaultAsync(f => f.LocalPath == localPath);
     if (folder == null)
     {
@@ -385,6 +403,7 @@ app.MapPost("/api/folders/{watchedFolderId:long}/clouds", async (
     var folder = await db.WatchedFolders
         .Include(item => item.AssignedClouds)
         .Include(item => item.UserAssignedClouds)
+        .Include(item => item.UserCloudRemovalAssignments)
         .SingleOrDefaultAsync(item => item.Id == watchedFolderId, cancellationToken);
     if (folder is null)
     {
@@ -458,6 +477,7 @@ app.MapDelete("/api/folders/{watchedFolderId:long}/clouds/{provider}/{accountId}
     var folder = await db.WatchedFolders
         .Include(item => item.AssignedClouds)
         .Include(item => item.UserAssignedClouds)
+        .Include(item => item.UserCloudRemovalAssignments)
         .SingleOrDefaultAsync(item => item.Id == watchedFolderId, cancellationToken);
     if (folder is null)
     {

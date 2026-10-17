@@ -107,6 +107,8 @@ namespace StorageStandby.Backend.Core
                 .Select(i => i.WatchedFolderId)
                 .Union(db.WatchedFolderUserCloudAssignments
                     .Select(cloud => cloud.WatchedFolderId))
+                .Union(db.WatchedFolderUserCloudRemovalAssignments
+                    .Select(cloud => cloud.WatchedFolderId))
                 .Union(db.WatchedFolderCloudMetadata
                     .Where(cloud => cloud.State == CloudAssignmentState.PendingBootstrap
                         || cloud.State == CloudAssignmentState.Failed
@@ -145,13 +147,14 @@ namespace StorageStandby.Backend.Core
                 var watchedFolder = await db.WatchedFolders
                     .Include(folder => folder.AssignedClouds)
                     .Include(folder => folder.UserAssignedClouds)
+                    .Include(folder => folder.UserCloudRemovalAssignments)
                     .SingleOrDefaultAsync(folder => folder.Id == id, cancellationToken);
                 if (watchedFolder is null)
                 {
                     continue;
                 }
 
-                await ProcessRemovingCloudsAsync(db, watchedFolder, cancellationToken);
+                await ProcessRemovingCloudsAsync(db, watchedFolder, cancellationToken, provider, accountId);
                 if (string.IsNullOrWhiteSpace(watchedFolder.LocalPath))
                 {
                     continue;
@@ -513,15 +516,28 @@ namespace StorageStandby.Backend.Core
         private async Task ProcessRemovingCloudsAsync(
             AppDbContext db,
             WatchedFolder watchedFolder,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            Providers? provider = null,
+            string? accountId = null)
         {
-            var removingClouds = watchedFolder.AssignedClouds
-                .Where(cloud => cloud.State == CloudAssignmentState.Removing)
+            var pendingRemovals = watchedFolder.UserCloudRemovalAssignments
+                .Where(removal => !provider.HasValue
+                    || removal.Provider == provider.Value
+                    && string.Equals(removal.AccountId, accountId, StringComparison.OrdinalIgnoreCase))
                 .ToList();
             await using var providerScope = _scopeFactory.CreateAsyncScope();
 
-            foreach (var cloud in removingClouds)
+            foreach (var removal in pendingRemovals)
             {
+                var cloud = watchedFolder.AssignedClouds.SingleOrDefault(item =>
+                    item.Provider == removal.Provider
+                    && string.Equals(item.AccountId, removal.AccountId, StringComparison.OrdinalIgnoreCase));
+                if (cloud is null)
+                {
+                    db.WatchedFolderUserCloudRemovalAssignments.Remove(removal);
+                    continue;
+                }
+
                 try
                 {
                     if (!string.IsNullOrWhiteSpace(cloud.RemoteFolderId))
@@ -550,6 +566,7 @@ namespace StorageStandby.Backend.Core
                     }
 
                     db.WatchedFolderCloudMetadata.Remove(cloud);
+                    db.WatchedFolderUserCloudRemovalAssignments.Remove(removal);
                     await db.SaveChangesAsync(cancellationToken);
                 }
                 catch (OperationCanceledException)
@@ -1101,21 +1118,27 @@ namespace StorageStandby.Backend.Core
 
             if (cloudMetadataToRemove is null)
             {
-                await db.WatchedFolderUserCloudAssignments
-                    .Where(item => item.WatchedFolderId == folder.Id
-                        && item.Provider == provider
-                        && item.AccountId == accountId)
-                    .ExecuteDeleteAsync(cancellationToken);
                 return;
             }
 
-            await db.WatchedFolderUserCloudAssignments
-                .Where(item => item.WatchedFolderId == folder.Id
+            var existingRemoval = await db.WatchedFolderUserCloudRemovalAssignments
+                .SingleOrDefaultAsync(item => item.WatchedFolderId == folder.Id
                     && item.Provider == provider
-                    && item.AccountId == accountId)
-                .ExecuteDeleteAsync(cancellationToken);
-            cloudMetadataToRemove.State = CloudAssignmentState.Removing;
-            cloudMetadataToRemove.LastError = null;
+                    && item.AccountId == accountId,
+                    cancellationToken);
+            if (existingRemoval is not null)
+            {
+                db.WatchedFolderUserCloudRemovalAssignments.Remove(existingRemoval);
+                await db.SaveChangesAsync(cancellationToken);
+                return;
+            }
+
+            db.WatchedFolderUserCloudRemovalAssignments.Add(new WatchedFolderUserCloudRemovalAssignment
+            {
+                WatchedFolderId = folder.Id,
+                Provider = provider,
+                AccountId = accountId
+            });
             await db.SaveChangesAsync(cancellationToken);
         }
 
@@ -1141,6 +1164,7 @@ namespace StorageStandby.Backend.Core
             var persistedFolder = await db.WatchedFolders
                 .Include(watchedFolder => watchedFolder.AssignedClouds)
                 .Include(watchedFolder => watchedFolder.UserAssignedClouds)
+                .Include(watchedFolder => watchedFolder.UserCloudRemovalAssignments)
                 .SingleOrDefaultAsync(watchedFolder => watchedFolder.Id == folder.Id, cancellationToken);
 
             if (persistedFolder is null)
@@ -1153,6 +1177,14 @@ namespace StorageStandby.Backend.Core
                     && string.Equals(cloud.AccountId, accountId, StringComparison.OrdinalIgnoreCase)))
             {
                 return;
+            }
+
+            var pendingRemoval = persistedFolder.UserCloudRemovalAssignments.SingleOrDefault(item =>
+                item.Provider == provider
+                && string.Equals(item.AccountId, accountId, StringComparison.OrdinalIgnoreCase));
+            if (pendingRemoval is not null)
+            {
+                persistedFolder.UserCloudRemovalAssignments.Remove(pendingRemoval);
             }
 
             if (!persistedFolder.UserAssignedClouds.Any(cloud =>

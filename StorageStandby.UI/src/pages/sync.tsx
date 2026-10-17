@@ -2,20 +2,22 @@ import { useEffect, useMemo, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { Ellipsis, Pause, Play, RefreshCw, Trash2 } from "lucide-react"
+import { Ellipsis, Pause, Play, RefreshCw } from "lucide-react"
 import { cn, getFolderName, handleOpenExplorer } from "@/lib/utils"
 import {
     pauseCurrentSync,
     fetchPendingSyncItems,
+    fetchSystemSettings,
     removeFolderCloud,
     setSyncPaused,
+    triggerCloudAssignmentSync,
     triggerSync,
 } from "@/api/data"
 import { refreshSyncEvents, useSyncEvents } from "@/lib/sync-events"
 import { refreshWatchedFolders, useWatchedFolders } from "@/lib/watched-folders"
 import { getProviderDisplayName, type Providers } from "@/types/providers"
 import type { SyncEvent, WatchedFolder } from "@/types/data"
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuPortal, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { useConnectedAccounts } from "@/lib/connected-accounts"
 
@@ -36,7 +38,7 @@ type CloudAssignmentRow = {
     folder: WatchedFolder
     provider: Providers
     accountId: string
-    state: number
+    type: "new" | "removal"
     lastError: string | null
 }
 
@@ -59,6 +61,7 @@ export function Sync() {
         void refreshSyncEvents()
         void refreshWatchedFolders()
         void fetchPendingSyncItems().then(setPendingItems).catch(console.error)
+        void fetchSystemSettings().then((settings) => setIsPaused(settings.isSyncPaused)).catch(console.error)
 
         const refreshTimer = window.setInterval(() => {
             void refreshSyncEvents()
@@ -125,29 +128,26 @@ export function Sync() {
     const assignmentRows = useMemo<CloudAssignmentRow[]>(() => {
         const rows: CloudAssignmentRow[] = []
         for (const folder of folders) {
-            const metadataKeys = new Set<string>()
-            for (const cloud of folder.assignedClouds) {
-                const key = `${folder.id}:${cloud.provider}:${cloud.accountId.toLowerCase()}`
-                metadataKeys.add(key)
+            for (const cloud of folder.userAssignedClouds) {
+                const key = `${folder.id}:new:${cloud.provider}:${cloud.accountId.toLowerCase()}`
                 rows.push({
                     id: key,
                     folder,
                     provider: cloud.provider,
                     accountId: cloud.accountId,
-                    state: cloud.state,
-                    lastError: cloud.lastError,
+                    type: "new",
+                    lastError: null,
                 })
             }
 
-            for (const cloud of folder.userAssignedClouds) {
-                const key = `${folder.id}:${cloud.provider}:${cloud.accountId.toLowerCase()}`
-                if (metadataKeys.has(key)) continue
+            for (const cloud of folder.userCloudRemovalAssignments) {
+                const key = `${folder.id}:removal:${cloud.provider}:${cloud.accountId.toLowerCase()}`
                 rows.push({
                     id: key,
                     folder,
                     provider: cloud.provider,
                     accountId: cloud.accountId,
-                    state: 0,
+                    type: "removal",
                     lastError: null,
                 })
             }
@@ -172,18 +172,6 @@ export function Sync() {
 
     const getFolderLabel = (event: SyncEvent, localPath: string | null | undefined) =>
         localPath ?? `Folder ${event.watchedFolderId}`
-
-    const getAssignmentStatus = (state: number) => {
-        switch (state) {
-            case 0: return "Queued"
-            case 1: return "Bootstrapping"
-            case 2: return "Active"
-            case 3: return "Failed"
-            case 4: return "Removing"
-            case 5: return "Unlinked"
-            default: return "Unknown"
-        }
-    }
 
     return (
         <div className="space-y-6 p-4">
@@ -286,7 +274,7 @@ export function Sync() {
                     <Table>
                         <TableHeader>
                             <TableRow>
-                                <TableHead>Folder Path</TableHead>
+                                <TableHead>Folder</TableHead>
                                 <TableHead>Destination</TableHead>
                                 <TableHead>Account</TableHead>
                                 <TableHead>Changes Tracked</TableHead>
@@ -297,7 +285,16 @@ export function Sync() {
                         <TableBody>
                             {currentRows.map(({ event, folder }) => (
                                 <TableRow key={event.id}>
-                                    <TableCell className="font-medium">{getFolderLabel(event, folder?.localPath)}</TableCell>
+                                    <TableCell className="font-medium">
+                                        <Tooltip>
+                                            <TooltipTrigger asChild>
+                                                <span>{folder ? getFolderName(folder) : getFolderLabel(event, undefined)}</span>
+                                            </TooltipTrigger>
+                                            <TooltipContent>
+                                                {folder ? (folder.localPath ?? "No local path") : "No local path"}
+                                            </TooltipContent>
+                                        </Tooltip>
+                                    </TableCell>
                                     <TableCell>{getProviderDisplayName(event.provider as Providers)}</TableCell>
                                     <TableCell>{event.accountId}</TableCell>
                                     <TableCell className="text-right">
@@ -321,14 +318,14 @@ export function Sync() {
             <div className="rounded-2xl border border-border bg-background p-4 space-y-4">
                 <div className="flex items-center justify-between">
                     <div>
-                        <h2 className="text-lg font-semibold">Cloud Assignments</h2>
-                        <p className="text-sm text-muted-foreground">Uploading watched folders to new remote locations.</p>
+                        <h2 className="text-lg font-semibold">Pending Cloud Assignments</h2>
+                        <p className="text-sm text-muted-foreground">New cloud assignments and queued remote removals.</p>
                     </div>
                     <Badge variant="outline">{assignmentRows.length} Assigned</Badge>
                 </div>
 
                 {assignmentRows.length === 0 ? (
-                    <p className="text-sm text-muted-foreground">No cloud assignments.</p>
+                    <p className="text-sm text-muted-foreground">No pending cloud assignments.</p>
                 ) : (
                     <Table>
                         <TableHeader>
@@ -336,6 +333,7 @@ export function Sync() {
                                 <TableHead>Folder</TableHead>
                                 <TableHead>Provider</TableHead>
                                 <TableHead>Account</TableHead>
+                                <TableHead>Type</TableHead>
                                 <TableHead>Status</TableHead>
                                 <TableHead className="text-right">Actions</TableHead>
                             </TableRow>
@@ -347,31 +345,61 @@ export function Sync() {
                                     ?.email ?? row.accountId
                                 return (
                                     <TableRow key={row.id}>
-                                        <TableCell className="font-medium">{getFolderName(row.folder)}</TableCell>
+                                        <TableCell className="font-medium">
+                                            <Tooltip>
+                                                <TooltipTrigger asChild>
+                                                    <span>{getFolderName(row.folder)}</span>
+                                                </TooltipTrigger>
+                                                <TooltipContent>
+                                                    {row.folder.localPath ?? "No local path"}
+                                                </TooltipContent>
+                                            </Tooltip>
+                                        </TableCell>
                                         <TableCell>{getProviderDisplayName(row.provider)}</TableCell>
                                         <TableCell>{email}</TableCell>
                                         <TableCell>
-                                            <Badge variant={row.state === 3 ? "destructive" : row.state === 2 ? "default" : "outline"}>
-                                                {getAssignmentStatus(row.state)}
+                                            <Badge variant={row.type === "removal" ? "destructive" : "outline"}>
+                                                {row.type === "new" ? "New Assignment" : "Removal"}
                                             </Badge>
+                                        </TableCell>
+                                        <TableCell>
+                                            <Badge variant="outline">Pending</Badge>
                                             {row.lastError && <p className="mt-1 text-xs text-destructive">{row.lastError}</p>}
                                         </TableCell>
                                         <TableCell className="text-right">
-                                            <Button
-                                                variant="ghost"
-                                                size="sm"
-                                                disabled={row.state === 4}
-                                                onClick={() => void handleEventAction(async () => {
-                                                    await removeFolderCloud(row.folder.id, {
-                                                        provider: row.provider,
-                                                        accountId: row.accountId,
-                                                    })
-                                                    await refreshWatchedFolders()
-                                                })}
-                                            >
-                                                <Trash2 className="mr-2 size-4" />
-                                                {row.state === 0 ? "Cancel" : "Queue removal"}
-                                            </Button>
+                                            <DropdownMenu>
+                                                <DropdownMenuTrigger asChild>
+                                                    <Button variant="ghost" size="sm">
+                                                        <Ellipsis className="size-4" />
+                                                    </Button>
+                                                </DropdownMenuTrigger>
+                                                <DropdownMenuPortal>
+                                                    <DropdownMenuContent align="end">
+                                                        <DropdownMenuItem
+                                                            onSelect={() => void handleEventAction(async () => {
+                                                                await triggerCloudAssignmentSync(row.folder.id, {
+                                                                    provider: row.provider,
+                                                                    accountId: row.accountId,
+                                                                })
+                                                                await refreshWatchedFolders()
+                                                            })}
+                                                        >
+                                                            Execute now
+                                                        </DropdownMenuItem>
+                                                        <DropdownMenuItem
+                                                            onClick={() => void handleEventAction(async () => {
+                                                                await removeFolderCloud(row.folder.id, {
+                                                                    provider: row.provider,
+                                                                    accountId: row.accountId,
+                                                                })
+                                                                await refreshWatchedFolders()
+                                                            })}
+                                                        >
+                                                            {row.type === "new" ? "Cancel" : "Cancel removal"}
+                                                        </DropdownMenuItem>
+                                                    </DropdownMenuContent>
+                                                </DropdownMenuPortal>
+                                            </DropdownMenu>
                                         </TableCell>
                                     </TableRow>
                                 )
@@ -403,7 +431,7 @@ export function Sync() {
                         </TableRow>
                     </TableHeader>
                     <TableBody>
-                        {queueRows.length == 0 && 
+                        {queueRows.length == 0 &&
                             <TableRow>
                                 <TableCell colSpan={5} className="text-center py-6">
                                     <p className="text-sm text-muted-foreground">Assign clouds to a folder to see pending sync operations!</p>
@@ -411,52 +439,52 @@ export function Sync() {
                             </TableRow>
                         }
                         {queueRows.map((row) => (
-                        <TableRow key={row.id}>
-                            <TableCell className="font-medium">
-                                <Tooltip>
-                                    <TooltipTrigger asChild>
-                                        <Button 
-                                            variant="link" 
-                                            className="cursor-pointer"
-                                            onClick={(event: React.MouseEvent<HTMLButtonElement>) => {
-                                                // check if Control key was held down
-                                                if (event.ctrlKey) {
-                                                    handleOpenExplorer(row.folderPath);
-                                                } else {
-                                                    
-                                                }
-                                            }}
-                                        >
-                                            {getFolderName(row.folder)}
-                                        </Button>
-                                    </TooltipTrigger>
-                                    <TooltipContent>
-                                        {row.folderPath ?? "No local path"}
-                                    </TooltipContent>
-                                </Tooltip>
-                            </TableCell>
-                            <TableCell>{getProviderDisplayName(row.provider)}</TableCell>
-                            <TableCell>{row.email}</TableCell>
-                            <TableCell>{row.pendingCount}</TableCell>
-                            <TableCell>{row.nextSyncAt ? new Date(row.nextSyncAt).toLocaleString() : "Due now"}</TableCell>
-                            <TableCell className="text-right">
-                                <DropdownMenu>
-                                    <DropdownMenuTrigger asChild>
-                                        <Button variant="ghost" size="sm">
-                                            <Ellipsis className="size-4" />
-                                        </Button>
-                                    </DropdownMenuTrigger>
-                                    <DropdownMenuContent align="end" className="w-72">
-                                        <DropdownMenuItem onSelect={() => void handleEventAction(triggerSync)}>
-                                            Sync Now
-                                        </DropdownMenuItem>
-                                        <DropdownMenuItem className="whitespace-normal">
-                                            Delete folder's tracked changes (applies to all clouds)
-                                        </DropdownMenuItem>
-                                    </DropdownMenuContent>
-                                </DropdownMenu>
-                            </TableCell>
-                        </TableRow>
+                            <TableRow key={row.id}>
+                                <TableCell className="font-medium">
+                                    <Tooltip>
+                                        <TooltipTrigger asChild>
+                                            <Button
+                                                variant="link"
+                                                className="cursor-pointer"
+                                                onClick={(event: React.MouseEvent<HTMLButtonElement>) => {
+                                                    // check if Control key was held down
+                                                    if (event.ctrlKey) {
+                                                        handleOpenExplorer(row.folderPath);
+                                                    } else {
+
+                                                    }
+                                                }}
+                                            >
+                                                {getFolderName(row.folder)}
+                                            </Button>
+                                        </TooltipTrigger>
+                                        <TooltipContent>
+                                            {row.folderPath ?? "No local path"}
+                                        </TooltipContent>
+                                    </Tooltip>
+                                </TableCell>
+                                <TableCell>{getProviderDisplayName(row.provider)}</TableCell>
+                                <TableCell>{row.email}</TableCell>
+                                <TableCell>{row.pendingCount}</TableCell>
+                                <TableCell>{row.nextSyncAt ? new Date(row.nextSyncAt).toLocaleString() : "Due now"}</TableCell>
+                                <TableCell className="text-right">
+                                    <DropdownMenu>
+                                        <DropdownMenuTrigger asChild>
+                                            <Button variant="ghost" size="sm">
+                                                <Ellipsis className="size-4" />
+                                            </Button>
+                                        </DropdownMenuTrigger>
+                                        <DropdownMenuContent align="end" className="w-72">
+                                            <DropdownMenuItem onSelect={() => void handleEventAction(triggerSync)}>
+                                                Sync Now
+                                            </DropdownMenuItem>
+                                            <DropdownMenuItem className="whitespace-normal">
+                                                Delete folder's tracked changes (applies to all clouds)
+                                            </DropdownMenuItem>
+                                        </DropdownMenuContent>
+                                    </DropdownMenu>
+                                </TableCell>
+                            </TableRow>
                         ))}
                     </TableBody>
                 </Table>

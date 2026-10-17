@@ -296,6 +296,30 @@ namespace StorageStandby.Backend.Migrations
                     b.ToTable("WatchedFolderUserCloudAssignments");
                 });
 
+            modelBuilder.Entity("StorageStandby.Backend.Models.WatchedFolderUserCloudRemovalAssignment", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("AccountId")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Provider")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long>("WatchedFolderId")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("WatchedFolderId", "Provider", "AccountId")
+                        .IsUnique();
+
+                    b.ToTable("WatchedFolderUserCloudRemovalAssignments");
+                });
+
             modelBuilder.Entity("StorageStandby.Backend.Models.SyncEvent", b =>
                 {
                     b.OwnsMany("StorageStandby.Backend.Models.FailedItemsDetails", "FailedItems", b1 =>
@@ -353,11 +377,22 @@ namespace StorageStandby.Backend.Migrations
                         .IsRequired();
                 });
 
+            modelBuilder.Entity("StorageStandby.Backend.Models.WatchedFolderUserCloudRemovalAssignment", b =>
+                {
+                    b.HasOne("StorageStandby.Backend.Models.WatchedFolder", null)
+                        .WithMany("UserCloudRemovalAssignments")
+                        .HasForeignKey("WatchedFolderId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("StorageStandby.Backend.Models.WatchedFolder", b =>
                 {
                     b.Navigation("AssignedClouds");
 
                     b.Navigation("UserAssignedClouds");
+
+                    b.Navigation("UserCloudRemovalAssignments");
                 });
 #pragma warning restore 612, 618
         }

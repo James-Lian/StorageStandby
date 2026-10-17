@@ -374,14 +374,17 @@ export function Folders() {
 		}
 	}
 
+	const getAssignedCloudKeys = (folder: WatchedFolder) =>
+		Array.from(new Set([
+			...folder.assignedClouds.map(getCloudKey),
+			...folder.userAssignedClouds.map(getCloudKey),
+		]))
+
 	const handleCloudSelectionChange = async (
 		folder: WatchedFolder,
 		nextValues: string[],
 	) => {
-		const previousValues = [
-			...folder.assignedClouds.map(getCloudKey),
-        	...folder.userAssignedClouds.map(getCloudKey),
-		]
+		const previousValues = getAssignedCloudKeys(folder)
 
 		const previous = new Set(previousValues)
 		const next = new Set(nextValues)
@@ -615,14 +618,11 @@ export function Folders() {
 								<TableCell>
 									<Combobox
 										multiple
-										value={[
-											...folder.assignedClouds.map(getCloudKey), 
-											...folder.userAssignedClouds.map(getCloudKey)
-										]}
+										value={getAssignedCloudKeys(folder)}
 										onValueChange={(value) => {handleCloudSelectionChange(folder, value)}}
 									>
-										<ComboboxTrigger aria-label={`${folder.assignedClouds.length + folder.userAssignedClouds.length} assigned cloud accounts`}>
-											<ComboboxValue>{folder.assignedClouds.length + folder.userAssignedClouds.length}</ComboboxValue>
+										<ComboboxTrigger aria-label={`${getAssignedCloudKeys(folder).length} assigned cloud accounts`}>
+											<ComboboxValue>{getAssignedCloudKeys(folder).length}</ComboboxValue>
 										</ComboboxTrigger>
 										<ComboboxContent>
 											<ComboboxList>
