@@ -380,8 +380,8 @@ namespace StorageStandby.Backend.Services
 
             foreach (var child in childPaths)
             {
-                bool wasIgnored = _fileSystem.IsFileIgnored(oldIgnoreRules, child.Path);
-                bool isIgnored = _fileSystem.IsFileIgnored(newIgnoreRules, child.Path);
+                bool wasIgnored = _fileSystem.IsFileIgnored(oldIgnoreRules, child.Path, folder.LocalPath);
+                bool isIgnored = _fileSystem.IsFileIgnored(newIgnoreRules, child.Path, folder.LocalPath);
 
                 if (wasIgnored == isIgnored)
                 {

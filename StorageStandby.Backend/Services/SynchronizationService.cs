@@ -379,7 +379,7 @@ namespace StorageStandby.Backend.Core
 
             var items = new List<PendingSyncItem>();
             foreach (string path in Directory.EnumerateDirectories(folder.LocalPath, "*", SearchOption.AllDirectories)
-                .Where(path => !_fileSystem.IsFileIgnored(folder.IgnoreRules, path)))
+                .Where(path => !_fileSystem.IsFileIgnored(folder.IgnoreRules, path, folder.LocalPath)))
             {
                 items.Add(new PendingSyncItem
                 {
@@ -390,7 +390,7 @@ namespace StorageStandby.Backend.Core
             }
 
             foreach (string path in Directory.EnumerateFiles(folder.LocalPath, "*", SearchOption.AllDirectories)
-                .Where(path => !_fileSystem.IsFileIgnored(folder.IgnoreRules, path)))
+                .Where(path => !_fileSystem.IsFileIgnored(folder.IgnoreRules, path, folder.LocalPath)))
             {
                 items.Add(new PendingSyncItem
                 {
@@ -763,7 +763,7 @@ namespace StorageStandby.Backend.Core
             }
 
             paths = paths
-                .Where(item => !_fileSystem.IsFileIgnored(folder.IgnoreRules, item.Path))
+                .Where(item => !_fileSystem.IsFileIgnored(folder.IgnoreRules, item.Path, folder.LocalPath))
                 .ToList();
             var pathValues = paths.Select(item => item.Path).ToList();
             var activeItems = await db.PendingSyncQueue
@@ -834,7 +834,7 @@ namespace StorageStandby.Backend.Core
                 .Select(path => (Path: path, IsFolder: true))
                 .Concat(Directory.EnumerateFiles(folder.LocalPath, "*", SearchOption.AllDirectories)
                     .Select(path => (Path: path, IsFolder: false)))
-                .Where(item => !_fileSystem.IsFileIgnored(folder.IgnoreRules, item.Path))
+                .Where(item => !_fileSystem.IsFileIgnored(folder.IgnoreRules, item.Path, folder.LocalPath))
                 .Where(item => !_watchedFolderService.IsPathOwnedByAnotherWatchedFolder(
                     watchedFolderId,
                     item.Path))

@@ -388,7 +388,7 @@ namespace StorageStandby.Backend.Workers
             WatchedFolder? folder = _watchedFolderService.GetWatchedFolderFromId(watchedFolderId);
             if (folder is null || _watchedFolderService.IsPathOwnedByAnotherWatchedFolder(watchedFolderId, e.FullPath)) return;
             // check if the changed file matches the ignore rules glob
-            if (_fileSystem.IsFileIgnored(folder.IgnoreRules, e.FullPath)) return;
+            if (_fileSystem.IsFileIgnored(folder.IgnoreRules, e.FullPath, folder.LocalPath)) return;
 
             if (_trackedFolders.TryGetValue(e.FullPath, out _) || Directory.Exists(e.FullPath))
             {
@@ -408,7 +408,7 @@ namespace StorageStandby.Backend.Workers
             if (IsDebounced(e.FullPath)) return;
             WatchedFolder? folder = _watchedFolderService.GetWatchedFolderFromId(watchedFolderId);
             if (folder is null || _watchedFolderService.IsPathOwnedByAnotherWatchedFolder(watchedFolderId, e.FullPath)) return;
-            if (_fileSystem.IsFileIgnored(folder.IgnoreRules, e.FullPath)) return;
+            if (_fileSystem.IsFileIgnored(folder.IgnoreRules, e.FullPath, folder.LocalPath)) return;
 
             _logger.LogInformation("File renamed: {OldPath} -> {NewPath}", e.OldFullPath, e.FullPath);
 

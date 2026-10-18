@@ -299,6 +299,16 @@ app.MapGet("/api/fileSystem/builddirectorytree", (
     return fileSystem.BuildDirectoryTree(path);
 });
 
+app.MapPost("/api/fileSystem/ignored", (
+    IgnoreRulesMatchRequest request,
+    LocalFileSystemService fileSystem) =>
+{
+    ArgumentNullException.ThrowIfNull(request.Paths);
+    return Results.Ok(request.Paths
+        .Select(path => fileSystem.IsFileIgnored(request.IgnoreRules, path, request.BasePath))
+        .ToArray());
+});
+
 app.MapGet("/api/fileSystem/getsize/{localPath}", (
     string localPath,
     LocalFileSystemService fileSystem) =>
@@ -735,6 +745,7 @@ await app.RunAsync();
 // -------------------------------------------------------------------
 
 public record OpenUrlRequest(string url);
+public record IgnoreRulesMatchRequest(string IgnoreRules, string BasePath, List<string> Paths);
 public record IgnoreRulesChangeRequest(string OldIgnoreRules, string NewIgnoreRules);
 public record OpenExplorerRequest(string LocalPath);
 public record SkipSyncRequest(int AdditionalSyncsToSkip = 0);
