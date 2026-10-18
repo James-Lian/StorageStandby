@@ -20,6 +20,7 @@ import type { SyncEvent, WatchedFolder } from "@/types/data"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuPortal, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { useConnectedAccounts } from "@/lib/connected-accounts"
+import { PendingChangesDialog } from "@/components/pending-changes-dialog"
 
 type QueueRow = {
     id: string
@@ -51,6 +52,7 @@ export function Sync() {
     // Sync: active governance and settings
 
     const [isPaused, setIsPaused] = useState(false)
+    const [pendingChangesFolder, setPendingChangesFolder] = useState<{ id: number; path?: string } | null>(null)
     const [pendingItems, setPendingItems] = useState<Awaited<ReturnType<typeof fetchPendingSyncItems>>>([])
     const { events, error: eventsError } = useSyncEvents()
     const { folders } = useWatchedFolders()
@@ -67,7 +69,7 @@ export function Sync() {
             void refreshSyncEvents()
             void fetchPendingSyncItems().then(setPendingItems).catch(console.error)
             void fetchSyncStatus().then((status) => setIsPaused(status.isPaused)).catch(console.error)
-        }, 2000)
+        }, 5000)
 
         return () => window.clearInterval(refreshTimer)
     }, [])
@@ -183,8 +185,8 @@ export function Sync() {
         localPath ?? `Folder ${event.watchedFolderId}`
 
     // dialog that shows pending changes
-    const handleShowPendingChanges = () => {
-
+    const handleShowPendingChanges = (folderId: number, folderPath: string | null) => {
+        setPendingChangesFolder({ id: folderId, path: folderPath ?? undefined })
     }
 
     return (
@@ -459,7 +461,7 @@ export function Sync() {
                                                     if (event.ctrlKey) {
                                                         handleOpenExplorer(row.folderPath);
                                                     } else {
-                                                        handleShowPendingChanges(row.folderId);
+                                                        handleShowPendingChanges(row.folderId, row.folderPath);
                                                     }
                                                 }}
                                             >
@@ -499,7 +501,15 @@ export function Sync() {
 
                 {eventsError && <p className="text-sm text-destructive">Unable to load current jobs: {eventsError.message}</p>}
             </div>
-
+            <PendingChangesDialog
+                open={pendingChangesFolder !== null}
+                onOpenChange={(open) => {
+                    if (!open) setPendingChangesFolder(null)
+                }}
+                watchedFolderId={pendingChangesFolder?.id ?? 0}
+                folderPath={pendingChangesFolder?.path}
+            />
         </div>
+
     )
 }
