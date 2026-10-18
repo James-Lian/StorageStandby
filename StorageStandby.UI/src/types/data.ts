@@ -75,10 +75,12 @@ export type PendingSyncItem = {
     watchedFolderId: number
     localPath: string
     isFolder: boolean
-    created: boolean
-    changed: boolean
-    renamed: boolean
+    deleted: boolean
     moved: boolean
+    originalLocalPath: string | null
+    renamed: boolean
+    changed: boolean
+    created: boolean
 }
 
 export type DirectoryNode = {
