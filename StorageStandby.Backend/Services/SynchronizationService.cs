@@ -908,8 +908,7 @@ namespace StorageStandby.Backend.Core
             var settings = await db.SystemSettings.SingleOrDefaultAsync(cancellationToken);
             if (settings is null
                 || !settings.AutomaticSyncs
-                || settings.IsSyncPaused
-                && (!settings.PauseSyncUntil.HasValue || settings.PauseSyncUntil > DateTime.UtcNow))
+                || _state.GetSyncPause())
             {
                 return;
             }

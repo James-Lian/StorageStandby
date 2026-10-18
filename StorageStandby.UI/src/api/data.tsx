@@ -143,6 +143,16 @@ export async function fetchSystemSettings(fName: string = "fetchSystemSettings")
     });
 }
 
+export async function fetchSyncStatus(fName: string = "fetchSyncStatus"): Promise<{ isPaused: boolean }> {
+    return ErrorHandlingWrapper(fName, async () => {
+        const response = await fetch(`http://storagestandby.local/api/status`);
+        if (!response.ok) {
+            throw new Error(`${fName}: Failed to fetch sync status`);
+        }
+        return await response.json() as { isPaused: boolean };
+    });
+}
+
 export async function fetchSyncEvents(fName: string = "fetchSyncEvents"): Promise<SyncEvent[]> {
     return ErrorHandlingWrapper(fName, async () => {
         const response = await fetch(`http://storagestandby.local/api/syncevents`);
@@ -177,12 +187,14 @@ export async function triggerSync(fName: string = "triggerSync"): Promise<void> 
 export async function setSyncPaused(
     paused: boolean,
     fName: string = "setSyncPaused",
-): Promise<void> {
+): Promise<boolean> {
     return ErrorHandlingWrapper(fName, async () => {
         const response = await fetch(`http://storagestandby.local/api/sync/pause/${paused}`, { method: "POST" });
         if (!response.ok) {
             throw new Error(`${fName}: Failed to update sync pause state`);
         }
+        const result = await response.json() as { paused: boolean };
+        return result.paused;
     });
 }
 

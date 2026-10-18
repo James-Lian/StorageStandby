@@ -7,7 +7,7 @@ import { cn, getFolderName, handleOpenExplorer } from "@/lib/utils"
 import {
     pauseCurrentSync,
     fetchPendingSyncItems,
-    fetchSystemSettings,
+    fetchSyncStatus,
     removeFolderCloud,
     setSyncPaused,
     triggerCloudAssignmentSync,
@@ -61,11 +61,12 @@ export function Sync() {
         void refreshSyncEvents()
         void refreshWatchedFolders()
         void fetchPendingSyncItems().then(setPendingItems).catch(console.error)
-        void fetchSystemSettings().then((settings) => setIsPaused(settings.isSyncPaused)).catch(console.error)
+        void fetchSyncStatus().then((status) => setIsPaused(status.isPaused)).catch(console.error)
 
         const refreshTimer = window.setInterval(() => {
             void refreshSyncEvents()
             void fetchPendingSyncItems().then(setPendingItems).catch(console.error)
+            void fetchSyncStatus().then((status) => setIsPaused(status.isPaused)).catch(console.error)
         }, 2000)
 
         return () => window.clearInterval(refreshTimer)
@@ -171,6 +172,12 @@ export function Sync() {
         }
     }
 
+    const handlePauseChange = async (paused: boolean) => {
+        await setSyncPaused(paused)
+        const status = await fetchSyncStatus()
+        setIsPaused(status.isPaused)
+    }
+
     // returns localPath or WatchedFolderId if localPath is not available
     const getFolderLabel = (event: SyncEvent, localPath: string | null | undefined) =>
         localPath ?? `Folder ${event.watchedFolderId}`
@@ -243,10 +250,7 @@ export function Sync() {
                         <Button
                             size="lg"
                             className="bg-indigo-600 text-white shadow-md hover:bg-indigo-700"
-                            onClick={() => void handleEventAction(async () => {
-                                await setSyncPaused(false)
-                                setIsPaused(false)
-                            })}
+                            onClick={() => void handleEventAction(() => handlePauseChange(false))}
                         >
                             <Play className="mr-2 size-4" /> Resume
                         </Button>
@@ -254,10 +258,7 @@ export function Sync() {
                         <Button
                             size="lg"
                             className="bg-red-600/75 text-white shadow-md hover:bg-red-700/75"
-                            onClick={() => void handleEventAction(async () => {
-                                await setSyncPaused(true)
-                                setIsPaused(true)
-                            })}
+                            onClick={() => void handleEventAction(() => handlePauseChange(true))}
                         >
                             <Pause className="mr-2 size-4" /> Pause
                         </Button>

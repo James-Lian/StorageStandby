@@ -60,12 +60,11 @@ namespace StorageStandby.Backend.Core
         }
         public bool GetSyncPause()
         {
-            // Check if pause period has expired
-            if (_pauseSyncUntil.HasValue && DateTime.Now < _pauseSyncUntil.Value)
+            lock (_IsSyncPausedLock)
             {
-                return true;
+                return IsSyncPaused &&
+                    (!_pauseSyncUntil.HasValue || _pauseSyncUntil.Value > DateTime.UtcNow);
             }
-            return IsSyncPaused;
         }
 
         // *** transient UI state (dashboard instruments) ***
