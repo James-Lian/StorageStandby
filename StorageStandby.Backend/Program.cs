@@ -173,6 +173,7 @@ app.MapGet("/api/status", (BackupEngineState state) => Results.Ok(new
 {
     Status = state.Status,
     IsPaused = state.GetSyncPause(),
+    IsUploading = state.IsUploading,
     CurrentOperation = state.CurrentOperation,
     LastSyncedFile = state.LastSyncedFile,
     QueueCount = state.ActiveUploadQueueCount,

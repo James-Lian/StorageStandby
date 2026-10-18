@@ -143,13 +143,13 @@ export async function fetchSystemSettings(fName: string = "fetchSystemSettings")
     });
 }
 
-export async function fetchSyncStatus(fName: string = "fetchSyncStatus"): Promise<{ isPaused: boolean }> {
+export async function fetchSyncStatus(fName: string = "fetchSyncStatus"): Promise<{ isPaused: boolean; isUploading: boolean }> {
     return ErrorHandlingWrapper(fName, async () => {
         const response = await fetch(`http://storagestandby.local/api/status`);
         if (!response.ok) {
             throw new Error(`${fName}: Failed to fetch sync status`);
         }
-        return await response.json() as { isPaused: boolean };
+        return await response.json() as { isPaused: boolean; isUploading: boolean };
     });
 }
 

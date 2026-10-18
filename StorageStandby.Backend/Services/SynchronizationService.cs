@@ -272,27 +272,35 @@ namespace StorageStandby.Backend.Core
                             destination,
                             cancellationToken);
 
-                        SyncResult result = destination.Provider switch
+                        _state.SetUploading(true);
+                        SyncResult result;
+                        try
                         {
-                            Providers.Google => await ExecuteGoogleSyncAsync(
-                                syncEvent,
-                                destinationQueue,
-                                destination.AccountId,
-                                cancellationToken),
-                            Providers.Microsoft => await ExecuteMicrosoftSyncAsync(
-                                syncEvent,
-                                destinationQueue,
-                                destination.AccountId,
-                                cancellationToken),
-                            Providers.Dropbox => await ExecuteDropboxSyncAsync(
-                                syncEvent,
-                                destinationQueue,
-                                destination.AccountId,
-                                cancellationToken),
-                            // _ => catch-all
-                            _ => throw new NotSupportedException(
-                                $"Queue execution is not implemented for {destination.Provider}.")
-                        };
+                            result = destination.Provider switch
+                            {
+                                Providers.Google => await ExecuteGoogleSyncAsync(
+                                    syncEvent,
+                                    destinationQueue,
+                                    destination.AccountId,
+                                    cancellationToken),
+                                Providers.Microsoft => await ExecuteMicrosoftSyncAsync(
+                                    syncEvent,
+                                    destinationQueue,
+                                    destination.AccountId,
+                                    cancellationToken),
+                                Providers.Dropbox => await ExecuteDropboxSyncAsync(
+                                    syncEvent,
+                                    destinationQueue,
+                                    destination.AccountId,
+                                    cancellationToken),
+                                _ => throw new NotSupportedException(
+                                    $"Queue execution is not implemented for {destination.Provider}.")
+                            };
+                        }
+                        finally
+                        {
+                            _state.SetUploading(false);
+                        }
 
                         syncEvent.CompletionType = result.Status;
                         syncEvent.CompletedTimestamp = DateTime.UtcNow;
