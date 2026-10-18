@@ -9,7 +9,7 @@ import {
     fetchPendingSyncItems,
     fetchSyncStatus,
     removeFolderCloud,
-    setSyncPaused,
+    setSyncPause,
     triggerCloudAssignmentSync,
     triggerSync,
 } from "@/api/data"
@@ -175,7 +175,7 @@ export function Sync() {
     }
 
     const handlePauseChange = async (paused: boolean) => {
-        await setSyncPaused(paused)
+        await setSyncPause(paused)
         const status = await fetchSyncStatus()
         setIsPaused(status.isPaused)
     }

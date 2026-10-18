@@ -184,9 +184,9 @@ export async function triggerSync(fName: string = "triggerSync"): Promise<void> 
     });
 }
 
-export async function setSyncPaused(
+export async function setSyncPause(
     paused: boolean,
-    fName: string = "setSyncPaused",
+    fName: string = "setSyncPause",
 ): Promise<boolean> {
     return ErrorHandlingWrapper(fName, async () => {
         const response = await fetch(`http://storagestandby.local/api/sync/pause/${paused}`, { method: "POST" });
