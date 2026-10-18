@@ -551,6 +551,7 @@ export function Folders() {
 							<TableHead className="pl-4">Name</TableHead>
 							<TableHead>Sync status</TableHead>
 							<TableHead>Last synced</TableHead>
+							<TableHead>Sync Timing</TableHead>
 							<TableHead>Clouds</TableHead>
 							<TableHead>Ignore Rules</TableHead>
 							{/* <TableHead>Track Snapshots</TableHead> */}
@@ -614,6 +615,13 @@ export function Folders() {
 								</TableCell>
 								<TableCell>
 									{formatDate(folder.lastSync)}
+								</TableCell>
+								<TableCell>
+									<Button
+										variant={"ghost"}
+									>
+										Edit
+									</Button>
 								</TableCell>
 								<TableCell>
 									<Combobox

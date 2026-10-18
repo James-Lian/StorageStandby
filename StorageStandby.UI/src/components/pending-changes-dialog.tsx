@@ -51,8 +51,8 @@ export function PendingChangesDialog({
                     <Table>
                         <TableHeader>
                             <TableRow>
-                                <TableHead>Local path</TableHead>
-                                <TableHead>Original local path</TableHead>
+                                <TableHead>Name</TableHead>
+                                <TableHead>Original path</TableHead>
                                 <TableHead className="text-center">Deleted</TableHead>
                                 <TableHead className="text-center">Moved</TableHead>
                                 <TableHead className="text-center">Renamed</TableHead>
@@ -75,7 +75,7 @@ export function PendingChangesDialog({
                                         : undefined}
                                 >
                                     <TableCell className="max-w-80 truncate" title={item.localPath}>
-                                        {item.localPath}
+                                        {item.localPath.split("\\").pop()}
                                     </TableCell>
                                     <TableCell className="max-w-80 truncate" title={item.originalLocalPath ?? undefined}>
                                         {item.originalLocalPath ?? ""}
