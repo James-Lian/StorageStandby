@@ -180,8 +180,27 @@ namespace StorageStandby.Backend.Services
             if (item.Moved || item.Renamed)
             {
                 existingPath = await ResolveRemotePathAsync(
-                    dropboxClient, localRootPath, remoteRootId, sourcePath, cancellationToken)
-                    ?? throw new FileNotFoundException("Remote item to update was not found.", sourcePath);
+                    dropboxClient, localRootPath, remoteRootId, sourcePath, cancellationToken);
+                if (existingPath is null)
+                {
+                    if (item.IsFolder)
+                    {
+                        await EnsureFolderPathAsync(
+                            dropboxClient,
+                            GetRemotePath(localRootPath, remoteRootId, item.LocalPath),
+                            cancellationToken);
+                    }
+                    else if (File.Exists(item.LocalPath))
+                    {
+                        string remotePath = GetRemotePath(localRootPath, remoteRootId, item.LocalPath);
+                        string parentPath = GetParentPath(remotePath, remoteRootId);
+                        await EnsureFolderPathAsync(dropboxClient, parentPath, cancellationToken);
+                        await using var stream = File.OpenRead(item.LocalPath);
+                        await dropboxClient.Files.UploadAsync(
+                            new UploadArg(remotePath, WriteMode.Overwrite.Instance), stream);
+                    }
+                    return;
+                }
             }
 
             if (item.Moved)

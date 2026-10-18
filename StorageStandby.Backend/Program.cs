@@ -554,7 +554,6 @@ app.MapGet("/api/syncevents", async (AppDbContext db) =>
 app.MapGet("/api/sync/pending", async (AppDbContext db, CancellationToken cancellationToken) =>
 {
     var pendingItems = await db.PendingSyncQueue
-        .Where(item => !item.Deleted)
         .OrderBy(item => item.WatchedFolderId)
         .ThenBy(item => item.LocalPath)
         .Select(item => new
@@ -562,7 +561,9 @@ app.MapGet("/api/sync/pending", async (AppDbContext db, CancellationToken cancel
             item.Id,
             item.WatchedFolderId,
             item.LocalPath,
+            item.OriginalLocalPath,
             item.IsFolder,
+            item.Deleted,
             item.Created,
             item.Changed,
             item.Renamed,
