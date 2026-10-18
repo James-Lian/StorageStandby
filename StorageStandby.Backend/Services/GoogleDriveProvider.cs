@@ -216,16 +216,40 @@ namespace StorageStandby.Backend.Services
             if (item.Moved)
             {
                 var remoteItem = await FindByLocalPathAsync(driveService, remoteRootId,
-                    localRootPath, item.OriginalLocalPath ?? item.LocalPath, cancellationToken)
-                    ?? throw new FileNotFoundException("Remote item to move was not found.", item.LocalPath);
+                    localRootPath, item.OriginalLocalPath ?? item.LocalPath, cancellationToken);
+                if (remoteItem is null)
+                {
+                    if (item.IsFolder)
+                    {
+                        await CreateFolderForPathAsync(driveService, localRootPath, remoteRootId, item.LocalPath, cancellationToken);
+                    }
+                    else if (File.Exists(item.LocalPath))
+                    {
+                        var current = await FindByLocalPathAsync(driveService, remoteRootId, localRootPath, item.LocalPath, cancellationToken);
+                        await UploadAsync(driveService, localRootPath, remoteRootId, item.LocalPath, current?.Id, cancellationToken);
+                    }
+                    return;
+                }
                 await MoveAsync(driveService, localRootPath, remoteRootId, remoteItem, item.LocalPath, cancellationToken);
             }
 
             if (item.Renamed)
             {
                 var remoteItem = await FindByLocalPathAsync(driveService, remoteRootId,
-                    localRootPath, item.OriginalLocalPath ?? item.LocalPath, cancellationToken)
-                    ?? throw new FileNotFoundException("Remote item to rename was not found.", item.LocalPath);
+                    localRootPath, item.OriginalLocalPath ?? item.LocalPath, cancellationToken);
+                if (remoteItem is null)
+                {
+                    if (item.IsFolder)
+                    {
+                        await CreateFolderForPathAsync(driveService, localRootPath, remoteRootId, item.LocalPath, cancellationToken);
+                    }
+                    else if (File.Exists(item.LocalPath))
+                    {
+                        var current = await FindByLocalPathAsync(driveService, remoteRootId, localRootPath, item.LocalPath, cancellationToken);
+                        await UploadAsync(driveService, localRootPath, remoteRootId, item.LocalPath, current?.Id, cancellationToken);
+                    }
+                    return;
+                }
                 await RenameAsync(driveService, remoteItem.Id, Path.GetFileName(item.LocalPath), cancellationToken);
             }
 

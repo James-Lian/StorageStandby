@@ -207,8 +207,26 @@ namespace StorageStandby.Backend.Services
             {
                 existing = await FindByLocalPathAsync(
                     graphService, driveId, remoteRootId, localRootPath,
-                    item.OriginalLocalPath ?? item.LocalPath, cancellationToken)
-                    ?? throw new FileNotFoundException("Remote item to update was not found.", item.LocalPath);
+                    item.OriginalLocalPath ?? item.LocalPath, cancellationToken);
+                if (existing is null)
+                {
+                    if (item.IsFolder)
+                    {
+                        await EnsureFolderPathAsync(
+                            graphService, driveId, localRootPath, remoteRootId,
+                            item.LocalPath, cancellationToken);
+                    }
+                    else if (File.Exists(item.LocalPath))
+                    {
+                        var current = await FindByLocalPathAsync(
+                            graphService, driveId, remoteRootId, localRootPath,
+                            item.LocalPath, cancellationToken);
+                        await UploadAsync(
+                            graphService, driveId, localRootPath, remoteRootId,
+                            item.LocalPath, current?.Id, cancellationToken);
+                    }
+                    return;
+                }
             }
 
             if (item.Moved)

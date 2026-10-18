@@ -477,7 +477,15 @@ namespace StorageStandby.Backend.Workers
             // PendingSyncItem exists
             if (item is not null)
             {
-                callback(item);
+                if (item.Created)
+                {
+                    // The item never reached the remote, so create-then-delete cancels out locally.
+                    db.PendingSyncQueue.Remove(item);
+                }
+                else
+                {
+                    callback(item);
+                }
                 _ = await db.SaveChangesAsync(stoppingToken);
             }
             else
@@ -838,7 +846,14 @@ namespace StorageStandby.Backend.Workers
                         deletedFolderPrefix,
                         StringComparison.OrdinalIgnoreCase))
                 {
-                    item.Deleted = true;
+                    if (item.Created)
+                    {
+                        db.PendingSyncQueue.Remove(item);
+                    }
+                    else
+                    {
+                        item.Deleted = true;
+                    }
                 }
             }
 
