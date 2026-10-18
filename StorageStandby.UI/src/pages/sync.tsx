@@ -7,9 +7,7 @@ import { cn, getFolderName, handleOpenExplorer } from "@/lib/utils"
 import {
     pauseCurrentSync,
     fetchPendingSyncItems,
-    fetchSyncStatus,
     removeFolderCloud,
-    setSyncPause,
     triggerCloudAssignmentSync,
     triggerSync,
 } from "@/api/data"
@@ -21,6 +19,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuPortal
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { useConnectedAccounts } from "@/lib/connected-accounts"
 import { PendingChangesDialog } from "@/components/pending-changes-dialog"
+import { refreshPauseState, updatePauseState, usePauseState } from "@/lib/pause-state"
 
 type QueueRow = {
     id: string
@@ -51,11 +50,11 @@ export function Sync() {
     // Sync vs Timeline
     // Sync: active governance and settings
 
-    const [isPaused, setIsPaused] = useState(false)
     const [pendingChangesFolder, setPendingChangesFolder] = useState<{ id: number; path?: string } | null>(null)
     const [pendingItems, setPendingItems] = useState<Awaited<ReturnType<typeof fetchPendingSyncItems>>>([])
     const { events, error: eventsError } = useSyncEvents()
     const { folders } = useWatchedFolders()
+    const { isPaused } = usePauseState()
 
     const { accountsByProvider } = useConnectedAccounts()
 
@@ -63,12 +62,11 @@ export function Sync() {
         void refreshSyncEvents()
         void refreshWatchedFolders()
         void fetchPendingSyncItems().then(setPendingItems).catch(console.error)
-        void fetchSyncStatus().then((status) => setIsPaused(status.isPaused)).catch(console.error)
+        void refreshPauseState()
 
         const refreshTimer = window.setInterval(() => {
             void refreshSyncEvents()
             void fetchPendingSyncItems().then(setPendingItems).catch(console.error)
-            void fetchSyncStatus().then((status) => setIsPaused(status.isPaused)).catch(console.error)
         }, 5000)
 
         return () => window.clearInterval(refreshTimer)
@@ -175,9 +173,7 @@ export function Sync() {
     }
 
     const handlePauseChange = async (paused: boolean) => {
-        await setSyncPause(paused)
-        const status = await fetchSyncStatus()
-        setIsPaused(status.isPaused)
+        await updatePauseState(paused)
     }
 
     // returns localPath or WatchedFolderId if localPath is not available

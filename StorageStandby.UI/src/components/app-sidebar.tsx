@@ -22,24 +22,22 @@ import { PROVIDER_METADATA, PROVIDERS } from "@/types/providers";
 import { Button } from "./ui/button";
 import { notifyInfo } from "@/lib/notifications";
 import { openInDefaultBrowser } from "@/api/utils";
-
-function convertBytesToWrittenForm(amtBytes: number) {
-    if (amtBytes > 1000000000) {
-        return String(Math.round(amtBytes/1000000000 * 10) / 10) + "GB";
-    } else if (amtBytes > 1000000) {
-        return String(Math.round(amtBytes/1000000 * 10) / 10) + "MB";
-    } else if (amtBytes > 1000) {
-        return String(Math.round(amtBytes/1000 * 10) / 10) + "KB";
-    } else {
-        return String(Math.round(amtBytes) + " B")
-    }
-}
+import { getSyncDisplayState, refreshPauseState, usePauseState } from "@/lib/pause-state"
+import { useEffect } from "react"
 
 // feature: spinner
 
 export function AppSidebar() {
     const { counts } = useConnectedAccounts()
     const { folders } = useWatchedFolders();
+    const pauseState = usePauseState()
+    const syncDisplayState = getSyncDisplayState(pauseState)
+
+    useEffect(() => {
+        void refreshPauseState()
+        const refreshTimer = window.setInterval(() => void refreshPauseState(), 5000)
+        return () => window.clearInterval(refreshTimer)
+    }, [])
     const googleDriveAccounts = counts[0]
     const oneDriveAccounts = counts[1]
     const dropboxAccounts = counts[2]
@@ -74,7 +72,7 @@ export function AppSidebar() {
                                         <RefreshCw /> <span>Sync status</span>
                                     </Link>
                                 </SidebarMenuButton>
-                                <SidebarMenuBadge>Paused</SidebarMenuBadge>
+                                <SidebarMenuBadge>{syncDisplayState}</SidebarMenuBadge>
                             </SidebarMenuItem>
                             <SidebarMenuItem>
                                 <SidebarMenuButton asChild>

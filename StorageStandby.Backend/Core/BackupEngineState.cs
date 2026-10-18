@@ -76,8 +76,15 @@ namespace StorageStandby.Backend.Core
         //};
 
         public string CurrentOperation { get; set; } = "Idle";
+        public bool IsUploading { get; private set; }
         public string LastSyncedFile { get; set; } = "None";
         public int ActiveUploadQueueCount { get; set; } = 0;
+
+        public void SetUploading(bool isUploading)
+        {
+            IsUploading = isUploading;
+            CurrentOperation = isUploading ? "Uploading" : "Idle";
+        }
 
         // 1. Thread-safety padlock. Threads must grab this before touching the list.
         private readonly object _ActiveWatchedPathsLock = new object();
