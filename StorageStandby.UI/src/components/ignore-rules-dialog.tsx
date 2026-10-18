@@ -1,10 +1,8 @@
-"use client"
-
 // Reusable "Ignore Rules" editor dialog.
 //
 // Provides two ways to edit a semicolon-delimited ignore rules string:
-//   1. A user-friendly UI table (live validity, reorder, delete, add).
-//   2. A raw semicolon-delimited textarea for power users.
+//   1. A user-friendly UI table (live validity, reorder, delete, add)
+//   2. A raw semicolon-delimited textarea for power users
 //
 // Usage (modular / reused across pages):
 //   <IgnoreRulesDialog
@@ -15,8 +13,7 @@
 //     basePath="C:/Users/james/Projects" // optional; omit for GLOBAL ignore rules
 //   />
 //
-// When `basePath` is provided, a label at the top shows the folder's full path and
-// each relative table row shows a tooltip with its full path.
+// When `basePath` is provided, a label at the top shows the folder's full path and each relative table row shows a tooltip with its full path
 
 import { useState } from "react"
 import {

@@ -14,6 +14,7 @@ import {
     CollapsibleTrigger,
 } from "@/components/ui/collapsible"
 import { fetchDirectoryTree } from "@/api/data"
+import { fetchIgnoredPaths } from "@/api/utils"
 import type { DirectoryNode } from "@/types/data"
 import { cn } from "@/lib/utils"
 
@@ -24,64 +25,19 @@ interface DirectoryTreeDialogProps {
     ignoreRules: string
 }
 
-function normalizePath(value: string) {
-    return value.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase()
+function flattenTreePaths(node: DirectoryNode): string[] {
+    return [
+        node.fullPath,
+        ...node.children.flatMap((child) => child ? flattenTreePaths(child) : []),
+    ]
 }
 
-function escapeRegex(value: string) {
-    return value.replace(/[.+^${}()|[\]\\]/g, "\\$&")
-}
-
-function globToRegex(glob: string) {
-    let pattern = ""
-    for (let index = 0; index < glob.length; index += 1) {
-        const character = glob[index]
-        if (character === "*" && glob[index + 1] === "*") {
-            pattern += ".*"
-            index += 1
-        } else if (character === "*") {
-            pattern += "[^/]*"
-        } else if (character === "?") {
-            pattern += "[^/]"
-        } else {
-            pattern += escapeRegex(character)
-        }
-    }
-    return new RegExp(`^${pattern}$`, "i")
-}
-
-function isIgnoredPath(fullPath: string, basePath: string, rules: string) {
-    const normalizedFullPath = normalizePath(fullPath)
-    const normalizedBasePath = normalizePath(basePath)
-    const relativePath = normalizedFullPath.startsWith(`${normalizedBasePath}/`)
-        ? normalizedFullPath.slice(normalizedBasePath.length + 1)
-        : normalizedFullPath
-
-    return rules
-        .split(";")
-        .map((rule) => rule.trim())
-        .filter(Boolean)
-        .some((rule) => {
-            const normalizedRawRule = rule.replace(/\\/g, "/").toLowerCase()
-            const matchesDescendants = normalizedRawRule.endsWith("/")
-            const ruleWithoutSlash = normalizedRawRule.replace(/\/+$/, "")
-            const candidates = ruleWithoutSlash.includes(":/") || ruleWithoutSlash.startsWith("/")
-                ? [normalizedFullPath]
-                : [relativePath, normalizedFullPath]
-            const regex = globToRegex(ruleWithoutSlash)
-            return candidates.some((candidate) =>
-                regex.test(candidate)
-                || matchesDescendants && candidate.startsWith(`${ruleWithoutSlash}/`),
-            )
-        })
-}
-
-function TreeNode({ node, basePath, ignoreRules }: {
+function TreeNode({ node, ignoredPaths, basePath }: {
     node: DirectoryNode
+    ignoredPaths: Set<string>
     basePath: string
-    ignoreRules: string
 }) {
-    const ignored = isIgnoredPath(node.fullPath, basePath, ignoreRules)
+    const ignored = ignoredPaths.has(node.fullPath)
     const children = node.children.filter((child): child is DirectoryNode => child !== null)
 
     if (!node.isDirectory) {
@@ -113,8 +69,8 @@ function TreeNode({ node, basePath, ignoreRules }: {
                             <TreeNode
                                 key={child.fullPath}
                                 node={child}
+                                ignoredPaths={ignoredPaths}
                                 basePath={basePath}
-                                ignoreRules={ignoreRules}
                             />
                         ))}
                     </div>
@@ -157,6 +113,7 @@ function DirectoryTreeContent({
     ignoreRules,
 }: Pick<DirectoryTreeDialogProps, "open" | "folderPath" | "ignoreRules">) {
     const [tree, setTree] = useState<DirectoryNode | null>(null)
+    const [ignoredPaths, setIgnoredPaths] = useState<Set<string>>(new Set())
     const [isLoading, setIsLoading] = useState(open && Boolean(folderPath))
     const [error, setError] = useState<string | null>(null)
 
@@ -165,9 +122,12 @@ function DirectoryTreeContent({
 
         let cancelled = false
         void fetchDirectoryTree(folderPath)
-            .then((result) => {
+            .then(async (result) => {
                 if (!cancelled) {
                     setTree(result)
+                    const paths = result ? flattenTreePaths(result) : []
+                    const matches = await fetchIgnoredPaths(folderPath, paths, ignoreRules)
+                    setIgnoredPaths(new Set(paths.filter((_, index) => matches[index])))
                     setIsLoading(false)
                 }
             })
@@ -181,11 +141,11 @@ function DirectoryTreeContent({
         return () => {
             cancelled = true
         }
-    }, [open, folderPath])
+    }, [open, folderPath, ignoreRules])
 
     const root = useMemo(() => tree && folderPath ? (
-        <TreeNode node={tree} basePath={folderPath} ignoreRules={ignoreRules} />
-    ) : null, [tree, folderPath, ignoreRules])
+        <TreeNode node={tree} ignoredPaths={ignoredPaths} basePath={folderPath} />
+    ) : null, [tree, folderPath, ignoredPaths])
 
     return (
         <div className="max-h-[60vh] min-h-40 overflow-auto rounded-md border border-border p-2">

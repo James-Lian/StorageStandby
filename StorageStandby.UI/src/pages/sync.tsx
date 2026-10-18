@@ -161,6 +161,7 @@ export function Sync() {
         setPendingItems(refreshedPendingItems)
     }
 
+    // handles actions that trigger data refreshes
     const handleEventAction = async (action: () => Promise<void>) => {
         try {
             await action()
@@ -170,8 +171,14 @@ export function Sync() {
         }
     }
 
+    // returns localPath or WatchedFolderId if localPath is not available
     const getFolderLabel = (event: SyncEvent, localPath: string | null | undefined) =>
         localPath ?? `Folder ${event.watchedFolderId}`
+
+    // dialog that shows pending changes
+    const handleShowPendingChanges = () => {
+
+    }
 
     return (
         <div className="space-y-6 p-4">
@@ -451,7 +458,7 @@ export function Sync() {
                                                     if (event.ctrlKey) {
                                                         handleOpenExplorer(row.folderPath);
                                                     } else {
-
+                                                        handleShowPendingChanges(row.folderId);
                                                     }
                                                 }}
                                             >

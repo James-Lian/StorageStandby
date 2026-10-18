@@ -22,3 +22,24 @@ export async function openInDefaultBrowser(url: string, fName: string = "openInD
         }
     })
 }
+
+export async function fetchIgnoredPaths(
+    basePath: string,
+    paths: string[],
+    ignoreRules: string,
+    fName: string = "fetchIgnoredPaths",
+): Promise<boolean[]> {
+    return ErrorHandlingWrapper(fName, async () => {
+        const response = await fetch("http://storagestandby.local/api/fileSystem/ignored", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ basePath, paths, ignoreRules }),
+        })
+
+        if (!response.ok) {
+            throw new Error(`${fName}: Failed to match ignore rules`)
+        }
+
+        return await response.json() as boolean[]
+    })
+}

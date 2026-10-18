@@ -136,22 +136,30 @@ namespace StorageStandby.Backend.Services
         // ------------------------------------------------------------------------------------------------------------
         // Ignore Rules-Related Methods (see WatchedFolder and FileSystemWatcherWorker)
         // https://code.visualstudio.com/docs/editor/glob-patterns
-        public bool IsFileIgnored(string ignoreRulesGlob, string path) // glob pattern reader
+        public bool IsFileIgnored(string ignoreRulesGlob, string path, string? basePath = null) // glob pattern reader
         {
             ArgumentNullException.ThrowIfNull(ignoreRulesGlob);
             ArgumentException.ThrowIfNullOrWhiteSpace(path);
 
             string normalizedPath = path.Replace('\\', '/');
+            string? normalizedBasePath = string.IsNullOrWhiteSpace(basePath)
+                ? null
+                : basePath.Replace('\\', '/').TrimEnd('/');
+            string? relativePath = normalizedBasePath is not null &&
+                normalizedPath.StartsWith(normalizedBasePath + '/', StringComparison.OrdinalIgnoreCase)
+                    ? normalizedPath[(normalizedBasePath.Length + 1)..]
+                    : null;
 
             return ignoreRulesGlob
                 .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                .Any(rule => MatchesGlob(rule, normalizedPath));
+                .Any(rule => MatchesGlob(rule, normalizedPath, relativePath));
         }
 
-        private static bool MatchesGlob(string rule, string normalizedPath)
+        private static bool MatchesGlob(string rule, string normalizedPath, string? relativePath)
         {
-            bool matchesDescendants = rule.EndsWith('/');
-            string normalizedRule = rule.Trim().Replace('\\', '/').TrimEnd('/');
+            string normalizedRuleWithSlash = rule.Trim().Replace('\\', '/');
+            bool matchesDescendants = normalizedRuleWithSlash.EndsWith('/');
+            string normalizedRule = normalizedRuleWithSlash.TrimEnd('/');
 
             if (normalizedRule.Length == 0)
             {
@@ -165,10 +173,12 @@ namespace StorageStandby.Backend.Services
                 pattern += "(?:/.*)?";
             }
 
-            return Regex.IsMatch(
-                normalizedPath,
+            bool Matches(string candidate) => Regex.IsMatch(
+                candidate,
                 $"^{pattern}$",
                 RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+            return Matches(normalizedPath) || relativePath is not null && Matches(relativePath);
         }
 
         private static string GlobToRegex(string glob)
