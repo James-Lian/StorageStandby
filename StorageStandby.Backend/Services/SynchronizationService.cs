@@ -1054,7 +1054,7 @@ namespace StorageStandby.Backend.Core
             int multiplier)
         {
             var identifiers = frequency.Identifiers
-                .Where(day => day >= 0 && day <= 6)
+                .Where(day => day >= 1 && day <= 7)
                 .Distinct()
                 .OrderBy(day => day)
                 .ToList();
@@ -1066,7 +1066,10 @@ namespace StorageStandby.Backend.Core
             for (int dayOffset = 1; dayOffset <= 7 * multiplier; dayOffset++)
             {
                 var candidate = fromUtc.AddDays(dayOffset);
-                if (identifiers.Contains((int)candidate.DayOfWeek))
+                int mondayBasedDay = candidate.DayOfWeek == DayOfWeek.Sunday
+                    ? 7
+                    : (int)candidate.DayOfWeek;
+                if (identifiers.Contains(mondayBasedDay))
                 {
                     return candidate;
                 }

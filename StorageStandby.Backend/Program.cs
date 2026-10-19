@@ -404,6 +404,44 @@ app.MapPost("/api/folders/{watchedFolderId:long}/reconcile", async (
     return Results.Ok(paths);
 });
 
+app.MapPut("/api/folders/{watchedFolderId:long}/sync-frequency", async (
+    long watchedFolderId,
+    SyncFrequency request,
+    AppDbContext db,
+    CancellationToken cancellationToken) =>
+{
+    if (request.Multiplier < 1)
+    {
+        return Results.BadRequest(new { Message = "The sync frequency multiplier must be at least 1." });
+    }
+
+    if (request.SyncIncrements is SyncIncrements.Weekly && request.Identifiers.Any(day => day < 1 || day > 7)
+        || request.SyncIncrements is SyncIncrements.Monthly && request.Identifiers.Any(day => day < 1 || day > 31))
+    {
+        return Results.BadRequest(new { Message = "Sync frequency identifiers are invalid." });
+    }
+
+    var folder = await db.WatchedFolders.SingleOrDefaultAsync(
+        item => item.Id == watchedFolderId,
+        cancellationToken);
+    if (folder is null)
+    {
+        return Results.NotFound(new { Message = "Folder not found." });
+    }
+
+    folder.SyncFrequency = new SyncFrequency
+    {
+        Multiplier = request.Multiplier,
+        Identifiers = request.Identifiers.Distinct().OrderBy(identifier => identifier).ToList(),
+        SyncIncrements = request.SyncIncrements,
+    };
+    folder.NextSyncAt = request.SyncIncrements == SyncIncrements.Inactive
+        ? null
+        : DateTime.UtcNow;
+    await db.SaveChangesAsync(cancellationToken);
+    return Results.Ok(folder.SyncFrequency);
+});
+
 app.MapPost("/api/folders/{watchedFolderId:long}/clouds", async (
     long watchedFolderId,
     ProviderAccountCloud request,

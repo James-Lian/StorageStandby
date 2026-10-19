@@ -51,7 +51,7 @@ namespace StorageStandby.Backend.Models
         public DateTime? LastSync { get; set; }
         public DateTime? NextSyncAt { get; set; }
         public DateTime DateAdded { get; set; }
-        public SyncFrequency? SyncFrequency { get; set; } = null;
+        public SyncFrequency SyncFrequency { get; set; } = new SyncFrequency{SyncIncrements=SyncIncrements.Inactive};
         public int SyncsToSkip { get; set; }
 
         // User assignments
