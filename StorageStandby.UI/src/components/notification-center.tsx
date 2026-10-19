@@ -1,5 +1,5 @@
 import * as React from "react"
-import { Bell, Check, CircleCheck, Copy, Info, OctagonX, TriangleAlert } from "lucide-react"
+import { Bell, Check, CircleCheck, Copy, Info, OctagonX, Pause, Play, TriangleAlert } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { ScrollArea } from "@/components/ui/scroll-area"
@@ -24,6 +24,8 @@ import {
     useNotificationCenter,
 } from "@/lib/notification-center"
 import { stringifyDetails } from "@/lib/notification-utils"
+import { useSidebar } from "@/components/ui/sidebar"
+import { updatePauseState, usePauseState } from "@/lib/pause-state"
 
 const levelIcon: Record<NotificationLevel, React.ReactNode> = {
     success: <CircleCheck className="size-4 text-emerald-600" />,
@@ -75,6 +77,7 @@ function NotificationDetails({ details }: { details: unknown }) {
                         className="absolute top-3 right-2 z-10 border border-border/60 bg-background/75 text-muted-foreground shadow-sm backdrop-blur-sm hover:bg-background/90 hover:text-foreground"
                     >
                         {isCopied ? <Check /> : <Copy />}
+
                     </Button>
                     <pre className="max-h-48 min-w-0 overflow-auto rounded-md bg-muted p-2 text-[11px] leading-relaxed whitespace-pre-wrap break-all">
                         {detailText}
@@ -87,16 +90,49 @@ function NotificationDetails({ details }: { details: unknown }) {
 
 export function NotificationCenter() {
     const [open, setOpen] = React.useState(false)
+    const { isMobile, state } = useSidebar()
     const { notifications, activeCount } = useNotificationCenter()
     const handleClearAll = React.useCallback(() => {
         toast.dismiss()
         clearAllNotifications()
     }, [])
 
+    const { isPaused } = usePauseState();
+
     return (
         <>
-            <div className="fixed inset-x-0 bottom-0 z-30 border-t border-border bg-background/95 backdrop-blur supports-backdrop-filter:backdrop-blur-sm">
-                <div className="mx-auto flex h-14 w-full items-center justify-end px-4">
+            <div className="fixed inset-x-0 bottom-0 z-30 border-t border-border bg-background/95 backdrop-blur supports-backdrop-filter:backdrop-blur-sm flex min-w-0 flex-row w-full h-14 items-center justify-center">
+                {/* Engine Pause/Play button */}
+                <div
+                    className={`hidden shrink-0 transition-[width] duration-200 ease-linear md:block ${
+                        !isMobile && state === "collapsed" ? "w-(--sidebar-width-icon)" : "w-(--sidebar-width)"
+                    }`}
+                />
+                <div className="flex h-14 items-center px-3 flex-1">
+                    <Button 
+                        className="h-10"
+                        onClick={() => {
+                            void updatePauseState(!isPaused).catch(console.error)
+                        }}
+                    >
+                        {isPaused ? 
+                            <Play
+                                className="size-5"
+                            />
+                        :
+                            <Pause
+                                className="size-5"
+                            />
+                        }
+                    </Button>
+                    <h2 className="text-lg font-semibold ml-3">
+                        {isPaused ? "Engine OFF" : "Engine ON"}
+                    </h2>
+                </div>
+                
+
+                {/* Notification center drawer */}
+                <div className="flex h-14 items-center justify-end px-4 shrink-0">
                     <Drawer open={open} onOpenChange={setOpen} direction="right">
                         <DrawerTrigger asChild>
                             <Button variant="outline" className="relative">
