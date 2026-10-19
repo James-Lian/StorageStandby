@@ -22,6 +22,7 @@ interface DirectoryTreeDialogProps {
     open: boolean
     onOpenChange: (open: boolean) => void
     folderPath: string | null
+    dateAdded: string | null
     ignoreRules: string
 }
 
@@ -84,6 +85,7 @@ export function DirectoryTreeDialog({
     open,
     onOpenChange,
     folderPath,
+    dateAdded,
     ignoreRules,
 }: DirectoryTreeDialogProps) {
     return (
@@ -92,7 +94,7 @@ export function DirectoryTreeDialog({
                 <DialogHeader>
                     <DialogTitle>Folder contents</DialogTitle>
                     <DialogDescription className="truncate" title={folderPath ?? undefined}>
-                        {folderPath ?? "No folder selected"}
+                        {folderPath ?? "No folder selected"}{dateAdded != null ? `, added ${dateAdded.substring(0, dateAdded.indexOf("T"))}` : ""}
                     </DialogDescription>
                 </DialogHeader>
                 <DirectoryTreeContent

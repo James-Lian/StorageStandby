@@ -126,7 +126,7 @@ export function NotificationCenter() {
                         }
                     </Button>
                     <h2 className="text-lg font-semibold ml-3">
-                        {isPaused ? "Engine OFF" : "Engine ON"}
+                        {isPaused ? "Engine Paused" : "Engine Running"}
                     </h2>
                 </div>
                 

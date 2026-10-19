@@ -186,7 +186,7 @@ export function Sync() {
     }
 
     return (
-        <div className="space-y-6 p-4">
+        <div className="w-full min-w-0 space-y-6">
             {/* Header / Global Action Bar */}
             <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
                 <div>
@@ -340,6 +340,7 @@ export function Sync() {
                                 <TableHead>Provider</TableHead>
                                 <TableHead>Account</TableHead>
                                 <TableHead>Type</TableHead>
+                                <TableHead>Scheduled</TableHead>
                                 <TableHead>Status</TableHead>
                                 <TableHead className="text-right">Actions</TableHead>
                             </TableRow>
@@ -367,6 +368,9 @@ export function Sync() {
                                             <Badge variant={row.type === "removal" ? "destructive" : "outline"}>
                                                 {row.type === "new" ? "New Assignment" : "Removal"}
                                             </Badge>
+                                        </TableCell>
+                                        <TableCell>
+                                            {row.folder.nextSyncAt ? new Date(row.folder.nextSyncAt).toLocaleString() : "Due now"}
                                         </TableCell>
                                         <TableCell>
                                             <Badge variant="outline">Pending</Badge>
@@ -440,7 +444,7 @@ export function Sync() {
                     <TableBody>
                         {queueRows.length == 0 &&
                             <TableRow>
-                                <TableCell colSpan={5} className="text-center py-6">
+                                <TableCell colSpan={6} className="text-center py-6">
                                     <p className="text-sm text-muted-foreground">Assign clouds to a folder to see pending sync operations!</p>
                                 </TableCell>
                             </TableRow>
