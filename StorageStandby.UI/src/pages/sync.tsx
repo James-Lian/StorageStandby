@@ -393,15 +393,16 @@ export function Sync() {
                                                             Execute now
                                                         </DropdownMenuItem>
                                                         <DropdownMenuItem
-                                                            onClick={() => void handleEventAction(async () => {
+                                                            onSelect={() => void handleEventAction(async () => {
                                                                 await removeFolderCloud(row.folder.id, {
                                                                     provider: row.provider,
                                                                     accountId: row.accountId,
                                                                 })
                                                                 await refreshWatchedFolders()
                                                             })}
+                                                            variant="destructive"
                                                         >
-                                                            {row.type === "new" ? "Cancel" : "Cancel removal"}
+                                                            {row.type === "new" ? "Cancel assignment" : "Cancel removal"}
                                                         </DropdownMenuItem>
                                                     </DropdownMenuContent>
                                                 </DropdownMenuPortal>
