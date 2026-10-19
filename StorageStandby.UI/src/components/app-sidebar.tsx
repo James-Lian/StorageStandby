@@ -45,6 +45,7 @@ export function AppSidebar() {
     return (
             <Sidebar
                 collapsible="icon"
+                className="z-1000"
             >
                 <SidebarHeader />
                 <SidebarContent>

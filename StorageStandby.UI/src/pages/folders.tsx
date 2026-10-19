@@ -376,7 +376,11 @@ export function Folders() {
 
 	const getAssignedCloudKeys = (folder: WatchedFolder) =>
 		Array.from(new Set([
-			...folder.assignedClouds.map(getCloudKey),
+			...folder.assignedClouds
+				.filter((cloud) => !folder.userCloudRemovalAssignments.some((removal) =>
+					removal.provider === cloud.provider
+					&& removal.accountId.toLowerCase() === cloud.accountId.toLowerCase()))
+				.map(getCloudKey),
 			...folder.userAssignedClouds.map(getCloudKey),
 		]))
 
@@ -642,20 +646,41 @@ export function Folders() {
 														const Icon = PROVIDER_METADATA[prov].icon 
 														
 														return accounts.map((account) => (
-															<ComboboxItem
-																key={`${prov}:${account.id}`}
-																value={`${prov}:${account.id}`}
-															>
-																<Icon />
-																<span className={inFolderAssignedClouds(folder, account, prov) ? "min-w-0 truncate text-blue-600" : "min-w-0 truncate"}>
-																	{account.email ?? "Unknown account"}
-																</span>
-																{
-																	inFolderAssignedClouds(folder, account, prov) ? <CircleCheck /> 
-																	: inUserAssignedClouds(folder, account, prov) ? <CircleDashed />
-																	: <></>
-																}
-															</ComboboxItem>
+															<div>
+																<Tooltip>
+																	<TooltipTrigger>
+																		<ComboboxItem
+																			key={`${prov}:${account.id}`}
+																			value={`${prov}:${account.id}`}
+																		>
+																			<Icon />
+																			<span className={`${inFolderAssignedClouds(folder, account, prov) ? "text-blue-600" : ""} flex min-w-0 w-48 max-w-full`}>
+																				{account.email !== null ? 
+																					(<>
+																						{/* truncate substring, ex: james.tian.li...@gmail.com */}
+																						<span className="min-w-0 truncate">
+																							{account.email?.substring(0, account.email.indexOf('@'))}
+																						</span>
+																						<span className="shrink-0">
+																							{account.email?.substring(account.email.indexOf('@'))}
+																						</span>
+																					</>)
+																				: "Unknown account"}
+																			</span>
+																			{
+																				inFolderAssignedClouds(folder, account, prov) ? <CircleCheck /> 
+																				: inUserAssignedClouds(folder, account, prov) ? <CircleDashed />
+																				: <></>
+																			}
+																		</ComboboxItem>
+																	</TooltipTrigger>
+																	<TooltipContent
+																		side="left"
+																	>
+																		{PROVIDER_METADATA[prov].providerName}: {account.email ?? "Unknown account"}
+																	</TooltipContent>
+																</Tooltip>
+															</div>
 														))
 													})
 												)}
