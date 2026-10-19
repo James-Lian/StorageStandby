@@ -435,6 +435,7 @@ export function Folders() {
 					if (!open) setDirectoryTreeFolder(null)
 				}}
 				folderPath={directoryTreeFolder?.localPath ?? null}
+				dateAdded={directoryTreeFolder?.dateAdded ?? null}
 				ignoreRules={directoryTreeFolder?.ignoreRules ?? ""}
 			/>
 			<ConfirmationModal
@@ -624,7 +625,7 @@ export function Folders() {
 									<Button
 										variant={"ghost"}
 									>
-										Edit
+										{/* {folder.syncFrequency Edit} */}
 									</Button>
 								</TableCell>
 								<TableCell>
