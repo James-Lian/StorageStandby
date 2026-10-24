@@ -166,7 +166,7 @@ namespace StorageStandby.Backend.Services
                 catch (Exception ex)
                 {
                     failed++;
-                    syncEvent.FailedItems.Add(new FailedItemsDetails
+                    syncEvent.FailedItems.Add(new FailedItemDetails
                     {
                         Id = syncEvent.GetNextFailedItemId(),
                         FailedItem = item.LocalPath,

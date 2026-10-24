@@ -30,7 +30,7 @@
         public string AccountId { get; set; } = string.Empty;
         public string SyncedItems { get; set; } = string.Empty; // semicolon delimited - files
         public string SyncedItemIds { get; set; } = string.Empty;
-        public List<FailedItemsDetails> FailedItems { get; set; } = [];
+        public List<FailedItemDetails> FailedItems { get; set; } = [];
         public string UnfinishedItems { get; set; } = string.Empty;
         public string UnfinishedItemIds { get; set; } = string.Empty;
 
@@ -39,7 +39,7 @@
             : FailedItems.Max(item => item.Id) + 1;
     }
 
-    public class FailedItemsDetails
+    public class FailedItemDetails
     {
         public long Id { get; set; }
         public string FailedItem { get; set; } = string.Empty;
