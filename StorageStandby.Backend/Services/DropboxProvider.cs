@@ -128,6 +128,7 @@ namespace StorageStandby.Backend.Services
                     failed++;
                     syncEvent.FailedItems.Add(new FailedItemsDetails
                     {
+                        Id = syncEvent.GetNextFailedItemId(),
                         FailedItem = item.LocalPath,
                         Details = ex.Message
                     });

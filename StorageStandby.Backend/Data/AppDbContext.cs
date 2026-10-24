@@ -49,7 +49,7 @@ namespace StorageStandby.Backend.Data
                 .OwnsMany(syncEvent => syncEvent.FailedItems, failedItem =>
                 {
                     failedItem.WithOwner().HasForeignKey("SyncEventId");
-                    failedItem.Property<long>("Id");
+                    failedItem.Property(item => item.Id).ValueGeneratedNever();
                     failedItem.HasKey("SyncEventId", "Id");
                 });
 
