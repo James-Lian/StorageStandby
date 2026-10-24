@@ -92,6 +92,9 @@ export function Sync() {
                 ...folder.assignedClouds
                     .filter((cloud) => cloud.state === 2)
                     .map((cloud) => ({ provider: cloud.provider, accountId: cloud.accountId })),
+                // ...folder.userAssignedClouds
+                //     .map((cloud) => ({provider: cloud.provider, accountId: cloud.accountId}))
+
             ]
             const uniqueDestinations = new Map(
                 destinations.map((destination) => [
@@ -479,7 +482,7 @@ export function Sync() {
                                 <TableCell>{row.pendingCount}</TableCell>
                                 <TableCell>{row.nextSyncAt ? new Date(row.nextSyncAt).toLocaleString() : "Due now"}</TableCell>
                                 <TableCell className="text-right">
-                                    <DropdownMenu>
+                                    <DropdownMenu> 
                                         <DropdownMenuTrigger asChild>
                                             <Button variant="ghost" size="sm">
                                                 <Ellipsis className="size-4" />
@@ -489,9 +492,9 @@ export function Sync() {
                                             <DropdownMenuItem onSelect={() => void handleEventAction(triggerSync)}>
                                                 Sync Now
                                             </DropdownMenuItem>
-                                            <DropdownMenuItem className="whitespace-normal">
+                                            {/* <DropdownMenuItem className="whitespace-normal">
                                                 Delete folder's tracked changes (applies to all clouds)
-                                            </DropdownMenuItem>
+                                            </DropdownMenuItem> */}
                                         </DropdownMenuContent>
                                     </DropdownMenu>
                                 </TableCell>

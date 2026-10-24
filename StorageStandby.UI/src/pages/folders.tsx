@@ -39,7 +39,7 @@ import {
 	SelectValue,
 } from "@/components/ui/select"
 import { PROBLEMATIC_FOLDER_TYPE } from "@/types/folders"
-import type { WatchedFolder } from "@/types/data"
+import { SyncIncrements, type WatchedFolder } from "@/types/data"
 import { refreshWatchedFolders, useWatchedFolders } from "@/lib/watched-folders"
 import { notifyError, notifySuccess } from "@/lib/notifications"
 import { readErrorDetails } from "@/lib/read-errors-utils"
@@ -48,6 +48,7 @@ import { useConnectedAccounts } from "@/lib/connected-accounts"
 import { ConfirmationModal } from "@/components/confirmation-dialog"
 import { IgnoreRulesDialog } from "@/components/ignore-rules-dialog"
 import { DirectoryTreeDialog } from "@/components/directory-tree-dialog"
+import { SyncFrequencyDialog } from "@/components/sync-frequency-dialog"
 import { addFolderCloud, reconcileFolderIgnoreRules, removeFolderCloud, resyncFolder } from "@/api/data"
 import type { ConnectedAccount } from "@/api/accounts"
 
@@ -141,6 +142,7 @@ export function Folders() {
 	const [pendingDeleteIds, setPendingDeleteIds] = useState<number[]>([])
 	const [ignoreRulesFolder, setIgnoreRulesFolder] = useState<WatchedFolder | null>(null)
 	 const [directoryTreeFolder, setDirectoryTreeFolder] = useState<WatchedFolder | null>(null)
+	const [syncFrequencyFolder, setSyncFrequencyFolder] = useState<WatchedFolder | null>(null)
 
 	// listens for WebView2 message from native folder picker in useEffect, e.g. {"type": "folder-selected", "path": "C:\example"}
 	// useCallback memoizes the function
@@ -429,6 +431,19 @@ export function Folders() {
 				basePath={ignoreRulesFolder?.localPath ?? undefined}
 				title="Folder ignore rules"
 			/>
+			<SyncFrequencyDialog
+				open={syncFrequencyFolder !== null}
+				onOpenChange={(open) => {
+					if (!open) setSyncFrequencyFolder(null)
+				}}
+				watchedFolderId={syncFrequencyFolder?.id ?? 0}
+				syncIncrements={(syncFrequencyFolder?.syncFrequency.syncIncrements ?? SyncIncrements.Inactive) as 0 | 1 | 2 | 3}
+				multiplier={syncFrequencyFolder?.syncFrequency.multiplier ?? 1}
+				identifiers={syncFrequencyFolder?.syncFrequency.identifiers ?? []}
+				onSyncIncrementsChange={async () => refreshWatchedFolders()}
+				onMultiplierChange={() => undefined}
+				onIdentifiersChange={() => undefined}
+			/>
 			<DirectoryTreeDialog
 				open={directoryTreeFolder !== null}
 				onOpenChange={(open) => {
@@ -486,7 +501,7 @@ export function Folders() {
 				</div>
 			</div>
 
-			<div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+			<div className="grid gap-4 sm:grid-cols-3 lg:grid-cols-6">
 				<div className="rounded-2xl border border-border bg-background p-4">
 					<p className="text-sm text-muted-foreground">Folders</p>
 					<p className="text-xl font-semibold">{filteredFolders.length}</p>
@@ -567,7 +582,7 @@ export function Folders() {
 					<TableBody>
 						{filteredFolders.length == 0 && 
 							<TableRow>
-								<TableCell colSpan={7} className="text-center py-6">
+								<TableCell colSpan={8} className="text-center py-6">
 									<p className="text-sm text-muted-foreground">No folders added.</p>
 								</TableCell>
 							</TableRow>
@@ -624,8 +639,16 @@ export function Folders() {
 								<TableCell>
 									<Button
 										variant={"ghost"}
+										onClick={() => setSyncFrequencyFolder(folder)}
 									>
-										{/* {folder.syncFrequency Edit} */}
+										{folder.syncFrequency.syncIncrements == SyncIncrements.Inactive ? "Edit"
+										: folder.syncFrequency.syncIncrements == SyncIncrements.Daily && folder.syncFrequency.multiplier === 1 ? "Daily" 
+										: folder.syncFrequency.syncIncrements == SyncIncrements.Daily ? `Every ${folder.syncFrequency.multiplier} days`
+										: folder.syncFrequency.syncIncrements == SyncIncrements.Weekly && folder.syncFrequency.multiplier == 1 ? `${folder.syncFrequency.identifiers.length}x weekly`
+										: folder.syncFrequency.syncIncrements == SyncIncrements.Weekly ? `${folder.syncFrequency.identifiers.length}x every ${folder.syncFrequency.multiplier} weeks`
+										: folder.syncFrequency.syncIncrements == SyncIncrements.Monthly && folder.syncFrequency.multiplier == 1 ? `${folder.syncFrequency.identifiers.length}x monthly`
+										: folder.syncFrequency.syncIncrements == SyncIncrements.Monthly ? `${folder.syncFrequency.identifiers.length}x every ${folder.syncFrequency.multiplier} months`:
+										"Edit"}
 									</Button>
 								</TableCell>
 								<TableCell>

@@ -276,7 +276,7 @@ export function IgnoreRulesDialog({
                         Cancel
                     </Button>
                     {activeTab == "ui" ? 
-                        <Button type="button" onClick={() => void applyChanges()} disabled={isApplying}>
+                    <Button type="button" onClick={() => void applyChanges()} disabled={isApplying}>
                             Confirm
                         </Button>
                     : 
