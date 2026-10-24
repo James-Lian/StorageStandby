@@ -1,6 +1,6 @@
 import { logApiProblemDetailsError, readErrorDetails } from "@/lib/read-errors-utils";
 import { ErrorHandlingWrapper } from "./errorhandling";
-import type { DirectoryNode, PendingSyncItem, SyncEvent, SystemSettings, WatchedFolder } from "@/types/data";
+import type { DirectoryNode, PendingSyncItem, SyncEvent, SyncFrequency, SystemSettings, WatchedFolder } from "@/types/data";
 
 // ---------------------------------------------------------------------------
 // WATCHED FOLDERS
@@ -321,6 +321,23 @@ export async function triggerCloudAssignmentSync(
         )
         if (!response.ok) {
             throw new Error(`${fName}: Failed to execute cloud assignment`)
+        }
+    })
+}
+
+export async function updateWatchedFolderSyncFrequency(
+    folderId: number,
+    syncFrequency: SyncFrequency,
+    fName: string = "updateWatchedFolderSyncFrequency",
+): Promise<void> {
+    return ErrorHandlingWrapper(fName, async () => {
+        const response = await fetch(`http://storagestandby.local/api/folders/${folderId}/sync-frequency`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(syncFrequency),
+        })
+        if (!response.ok) {
+            throw new Error(`${fName}: Failed to update sync frequency`)
         }
     })
 }
