@@ -33,10 +33,15 @@
         public List<FailedItemsDetails> FailedItems { get; set; } = [];
         public string UnfinishedItems { get; set; } = string.Empty;
         public string UnfinishedItemIds { get; set; } = string.Empty;
+
+        public long GetNextFailedItemId() => FailedItems.Count == 0
+            ? 1
+            : FailedItems.Max(item => item.Id) + 1;
     }
 
     public class FailedItemsDetails
     {
+        public long Id { get; set; }
         public string FailedItem { get; set; } = string.Empty;
         public string Details { get; set; } = string.Empty;
     }

@@ -341,6 +341,7 @@ namespace StorageStandby.Backend.Core
                         syncEvent.CompletedTimestamp = DateTime.UtcNow;
                         syncEvent.FailedItems.Add(new FailedItemsDetails
                         {
+                            Id = syncEvent.GetNextFailedItemId(),
                             FailedItem = string.Empty,
                             Details = ex.Message
                         });
