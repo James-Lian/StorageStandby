@@ -339,7 +339,7 @@ namespace StorageStandby.Backend.Core
                         metadata.LastError = ex.Message;
                         syncEvent.CompletionType = SyncEventType.Unfinished;
                         syncEvent.CompletedTimestamp = DateTime.UtcNow;
-                        syncEvent.FailedItems.Add(new FailedItemsDetails
+                        syncEvent.FailedItems.Add(new FailedItemDetails
                         {
                             Id = syncEvent.GetNextFailedItemId(),
                             FailedItem = string.Empty,
