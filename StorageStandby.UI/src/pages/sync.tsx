@@ -6,7 +6,6 @@ import { Ellipsis, Pause, Play, RefreshCw } from "lucide-react"
 import { cn, getFolderName, handleOpenExplorer } from "@/lib/utils"
 import {
     pauseCurrentSync,
-    fetchPendingSyncItems,
     removeFolderCloud,
     triggerCloudAssignmentSync,
     triggerSync,
@@ -20,6 +19,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { useConnectedAccounts } from "@/lib/connected-accounts"
 import { PendingChangesDialog } from "@/components/pending-changes-dialog"
 import { refreshPauseState, updatePauseState, usePauseState } from "@/lib/pause-state"
+import { refreshPendingSyncItems, usePendingSyncItems } from "@/lib/pending-sync-items"
 
 type QueueRow = {
     id: string
@@ -51,7 +51,7 @@ export function Sync() {
     // Sync: active governance and settings
 
     const [pendingChangesFolder, setPendingChangesFolder] = useState<{ id: number; path?: string } | null>(null)
-    const [pendingItems, setPendingItems] = useState<Awaited<ReturnType<typeof fetchPendingSyncItems>>>([])
+    const { items: pendingItems } = usePendingSyncItems()
     const { events, error: eventsError } = useSyncEvents()
     const { folders } = useWatchedFolders()
     const { isPaused } = usePauseState()
@@ -61,12 +61,12 @@ export function Sync() {
     useEffect(() => {
         void refreshSyncEvents()
         void refreshWatchedFolders()
-        void fetchPendingSyncItems().then(setPendingItems).catch(console.error)
+        void refreshPendingSyncItems()
         void refreshPauseState()
 
         const refreshTimer = window.setInterval(() => {
             void refreshSyncEvents()
-            void fetchPendingSyncItems().then(setPendingItems).catch(console.error)
+            void refreshPendingSyncItems()
         }, 5000)
 
         return () => window.clearInterval(refreshTimer)
@@ -120,7 +120,7 @@ export function Sync() {
 
         return rows.sort((left, right) =>
             (left.nextSyncAt ?? "").localeCompare(right.nextSyncAt ?? ""))
-    }, [folders, pendingItems])
+    }, [accountsByProvider, folders, pendingItems])
 
     const currentRows = useMemo(() => {
         const foldersById = new Map(folders.map((folder) => [folder.id, folder]))
@@ -140,7 +140,10 @@ export function Sync() {
                     provider: cloud.provider,
                     accountId: cloud.accountId,
                     type: "new",
-                    lastError: null,
+                    lastError: folder.assignedClouds.find((assignedCloud) =>
+                        assignedCloud.provider === cloud.provider
+                        && assignedCloud.accountId.toLowerCase() === cloud.accountId.toLowerCase()
+                    )?.lastError ?? null,
                 })
             }
 
@@ -161,8 +164,7 @@ export function Sync() {
 
     const refreshQueue = async () => {
         await refreshSyncEvents()
-        const refreshedPendingItems = await fetchPendingSyncItems()
-        setPendingItems(refreshedPendingItems)
+        await refreshPendingSyncItems();
     }
 
     // handles actions that trigger data refreshes

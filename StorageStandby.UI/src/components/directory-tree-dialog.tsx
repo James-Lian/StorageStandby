@@ -17,6 +17,7 @@ import { fetchDirectoryTree } from "@/api/data"
 import { fetchIgnoredPaths } from "@/api/utils"
 import type { DirectoryNode } from "@/types/data"
 import { cn } from "@/lib/utils"
+import { usePendingSyncItems } from "@/lib/pending-sync-items"
 
 interface DirectoryTreeDialogProps {
     open: boolean
@@ -38,12 +39,14 @@ function TreeNode({ node, ignoredPaths, basePath }: {
     ignoredPaths: Set<string>
     basePath: string
 }) {
+    const { items: pendingItems } = usePendingSyncItems();
     const ignored = ignoredPaths.has(node.fullPath)
+    const editsTracked = pendingItems.some(i => i.localPath === node.fullPath);
     const children = node.children.filter((child): child is DirectoryNode => child !== null)
 
     if (!node.isDirectory) {
         return (
-            <div className={cn("flex items-center gap-2 rounded-md px-2 py-1 text-sm", ignored && "text-rose-600")}>
+            <div className={cn("flex items-center gap-2 rounded-md px-2 py-1 text-sm", ignored && "text-muted-foreground italic")}>
                 <File className="size-4 shrink-0" />
                 <span className="truncate" title={node.fullPath}>{node.name}</span>
             </div>
@@ -56,7 +59,7 @@ function TreeNode({ node, ignoredPaths, basePath }: {
                 <Button
                     variant="ghost"
                     size="sm"
-                    className={cn("group w-full justify-start gap-2", ignored && "text-rose-600")}
+                    className={cn("group w-full justify-start gap-2", ignored && "text-muted-foreground italic", !ignored && editsTracked && "text-green-500 font-semibold")}
                 >
                     <ChevronRight className="size-4 shrink-0 transition-transform group-data-[state=open]:rotate-90" />
                     <Folder className="size-4 shrink-0" />
