@@ -322,13 +322,12 @@ namespace StorageStandby.Backend.Migrations
 
             modelBuilder.Entity("StorageStandby.Backend.Models.SyncEvent", b =>
                 {
-                    b.OwnsMany("StorageStandby.Backend.Models.FailedItemsDetails", "FailedItems", b1 =>
+                    b.OwnsMany("StorageStandby.Backend.Models.FailedItemDetails", "FailedItems", b1 =>
                         {
                             b1.Property<long>("SyncEventId")
                                 .HasColumnType("INTEGER");
 
                             b1.Property<long>("Id")
-                                .ValueGeneratedOnAdd()
                                 .HasColumnType("INTEGER");
 
                             b1.Property<string>("Details")
@@ -341,7 +340,7 @@ namespace StorageStandby.Backend.Migrations
 
                             b1.HasKey("SyncEventId", "Id");
 
-                            b1.ToTable("FailedItemsDetails");
+                            b1.ToTable("FailedItemDetails");
 
                             b1.WithOwner()
                                 .HasForeignKey("SyncEventId");

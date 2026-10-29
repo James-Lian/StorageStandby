@@ -129,7 +129,8 @@ namespace StorageStandby.Backend.Services
                 .SingleAsync(folder => folder.Id == syncEvent.WatchedFolderId, cancellationToken);
             // assigned cloud
             var cloud = watchedFolder.AssignedClouds.Single(metadata =>
-                metadata.Provider == Providers.Google && metadata.AccountId == syncEvent.AccountId);
+                metadata.Provider == Providers.Google
+                && string.Equals(metadata.AccountId, accountId, StringComparison.OrdinalIgnoreCase));
 
             // syncEvent metadata
             syncEvent.CompletionType = SyncEventType.InProgress;

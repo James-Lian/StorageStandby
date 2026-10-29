@@ -105,7 +105,8 @@ namespace StorageStandby.Backend.Services
                 .Include(folder => folder.AssignedClouds)
                 .SingleAsync(folder => folder.Id == syncEvent.WatchedFolderId, cancellationToken);
             var cloud = watchedFolder.AssignedClouds.Single(metadata =>
-                metadata.Provider == Providers.Microsoft && metadata.AccountId == syncEvent.AccountId);
+                metadata.Provider == Providers.Microsoft
+                && string.Equals(metadata.AccountId, accountId, StringComparison.OrdinalIgnoreCase));
 
             // sync event metadata
             syncEvent.CompletionType = SyncEventType.InProgress;
@@ -441,6 +442,27 @@ namespace StorageStandby.Backend.Services
             var graphService = BuildGraphClient(accountId);
             string driveId = (await graphService.Me.Drive.GetAsync(cancellationToken: cancellationToken))?.Id
                 ?? throw new InvalidOperationException("Microsoft Graph did not return the OneDrive ID.");
+
+            var existing = await FindChildrenByNameAsync(
+                graphService,
+                driveId,
+                "root",
+                folderName,
+                allowFiles: false,
+                cancellationToken);
+            if (existing.Count > 1)
+            {
+                throw new InvalidOperationException(
+                    $"Multiple OneDrive folders named '{folderName}' exist at the root.");
+            }
+
+            if (existing.Count == 1)
+            {
+                return existing[0].Id
+                    ?? throw new InvalidOperationException(
+                        $"OneDrive did not return an ID for the existing folder '{folderName}'.");
+            }
+
             var created = await graphService.Drives[driveId].Items["root"].Children.PostAsync(
                 new DriveItem
                 {

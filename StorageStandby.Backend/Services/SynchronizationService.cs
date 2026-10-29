@@ -224,6 +224,26 @@ namespace StorageStandby.Backend.Core
                             cancellationToken);
                     if (destinationQueue.Count == 0)
                     {
+                        if (isBootstrap && Directory.Exists(watchedFolder.LocalPath))
+                        {
+                            await ReconcileRemoteFolderAsync(
+                                db,
+                                watchedFolder,
+                                destination,
+                                cancellationToken);
+                            metadata.State = CloudAssignmentState.Active;
+                            metadata.LastError = null;
+                            var completedAssignments = watchedFolder.UserAssignedClouds.Where(item =>
+                                item.WatchedFolderId == id
+                                && item.Provider == destination.Provider
+                                && string.Equals(
+                                    item.AccountId,
+                                    destination.AccountId,
+                                    StringComparison.OrdinalIgnoreCase))
+                                .ToList();
+                            db.WatchedFolderUserCloudAssignments.RemoveRange(completedAssignments);
+                            await db.SaveChangesAsync(cancellationToken);
+                        }
                         continue;
                     }
 
@@ -474,7 +494,10 @@ namespace StorageStandby.Backend.Core
         {
             var cloud = watchedFolder.AssignedClouds.SingleOrDefault(metadata =>
                 metadata.Provider == destination.Provider
-                && metadata.AccountId == destination.AccountId);
+                && string.Equals(
+                    metadata.AccountId,
+                    destination.AccountId,
+                    StringComparison.OrdinalIgnoreCase));
 
             if (cloud is null)
             {

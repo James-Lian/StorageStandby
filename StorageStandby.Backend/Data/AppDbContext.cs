@@ -17,6 +17,7 @@ namespace StorageStandby.Backend.Data
 
         // Yo reconsider this portion:
         public DbSet<SyncEvent> SyncEvents { get; set; }
+        public DbSet<SyncOperation> SyncOperations { get; set; }
 
         public DbSet<PendingSyncItem> PendingSyncQueue { get; set; }
         public DbSet<UntrackedPath> UntrackedPaths { get; set; }

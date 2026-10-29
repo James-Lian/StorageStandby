@@ -84,7 +84,8 @@ namespace StorageStandby.Backend.Services
                 .Include(folder => folder.AssignedClouds)
                 .SingleAsync(folder => folder.Id == syncEvent.WatchedFolderId, cancellationToken);
             var cloud = watchedFolder.AssignedClouds.Single(metadata =>
-                metadata.Provider == Providers.Dropbox && metadata.AccountId == accountId);
+                metadata.Provider == Providers.Dropbox
+                && string.Equals(metadata.AccountId, accountId, StringComparison.OrdinalIgnoreCase));
 
             // sync event metadata
             syncEvent.CompletionType = SyncEventType.InProgress;
