@@ -228,7 +228,7 @@ app.MapPost("/api/sync/trigger", async (
 });
 
 // triggering a folder's sync for a specific provider/account cloud
-app.MapPost("/api/sync/trigger/{watchedFolderId:long}/{provider}/{accountId:string}", async (
+app.MapPost("/api/sync/trigger/{watchedFolderId:long}/{provider}/{accountId}", async (
     long watchedFolderId,
     Providers provider,
     string accountId,
