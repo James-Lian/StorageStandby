@@ -15,6 +15,13 @@ namespace StorageStandby.Backend.Core
     {
         private readonly IServiceScopeFactory _scopeFactory;
         private readonly SemaphoreSlim _syncExecutionLock = new(1, 1);
+        private readonly object _currentJobLock = new();
+        private Guid? _currentJobId;
+        private DateTime? _currentJobStartedAtUtc;
+        private long? _currentJobWatchedFolderId;
+        private Providers? _currentJobProvider;
+        private string? _currentJobAccountId;
+        private long? _currentJobSyncEventId;
 
         public BackupEngineState(
             IServiceScopeFactory scopeFactory
@@ -79,6 +86,109 @@ namespace StorageStandby.Backend.Core
         public bool IsUploading { get; private set; }
         public string LastSyncedFile { get; set; } = "None";
         public int ActiveUploadQueueCount { get; set; } = 0;
+
+        public Guid? CurrentJobId
+        {
+            get
+            {
+                lock (_currentJobLock)
+                {
+                    return _currentJobId;
+                }
+            }
+        }
+
+        public DateTime? CurrentJobStartedAtUtc
+        {
+            get
+            {
+                lock (_currentJobLock)
+                {
+                    return _currentJobStartedAtUtc;
+                }
+            }
+        }
+
+        public long? CurrentJobWatchedFolderId
+        {
+            get
+            {
+                lock (_currentJobLock)
+                {
+                    return _currentJobWatchedFolderId;
+                }
+            }
+        }
+
+        public Providers? CurrentJobProvider
+        {
+            get
+            {
+                lock (_currentJobLock)
+                {
+                    return _currentJobProvider;
+                }
+            }
+        }
+
+        public string? CurrentJobAccountId
+        {
+            get
+            {
+                lock (_currentJobLock)
+                {
+                    return _currentJobAccountId;
+                }
+            }
+        }
+
+        public long? CurrentJobSyncEventId
+        {
+            get
+            {
+                lock (_currentJobLock)
+                {
+                    return _currentJobSyncEventId;
+                }
+            }
+        }
+
+        public Guid BeginSyncJob(
+            long? watchedFolderId,
+            Providers? provider,
+            string? accountId,
+            long? syncEventId)
+        {
+            lock (_currentJobLock)
+            {
+                var jobId = Guid.NewGuid();
+                _currentJobId = jobId;
+                _currentJobStartedAtUtc = DateTime.UtcNow;
+                _currentJobWatchedFolderId = watchedFolderId;
+                _currentJobProvider = provider;
+                _currentJobAccountId = accountId;
+                _currentJobSyncEventId = syncEventId;
+                return jobId;
+            }
+        }
+
+        public void EndSyncJob(Guid jobId)
+        {
+            lock (_currentJobLock)
+            {
+                if (_currentJobId != jobId)
+                {
+                    return;
+                }
+
+                _currentJobId = null;
+                _currentJobStartedAtUtc = null;
+                _currentJobWatchedFolderId = null;
+                _currentJobProvider = null;
+                _currentJobAccountId = null;
+                _currentJobSyncEventId = null;
+            }
+        }
 
         public void SetUploading(bool isUploading)
         {

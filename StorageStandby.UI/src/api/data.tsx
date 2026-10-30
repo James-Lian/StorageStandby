@@ -214,7 +214,7 @@ export async function syncEventNow(
     fName: string = "syncEventNow",
 ): Promise<void> {
     return ErrorHandlingWrapper(fName, async () => {
-        const response = await fetch(`http://storagestandby.local/api/syncevents/${eventId}/sync-now`, { method: "POST" });
+        const response = await fetch(`http://storagestandby.local/api/syncevents/trigger/${eventId}`, { method: "POST" });
         if (!response.ok) {
             throw new Error(`${fName}: Failed to sync event`);
         }

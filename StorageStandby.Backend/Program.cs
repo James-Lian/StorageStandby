@@ -177,7 +177,18 @@ app.MapGet("/api/status", (BackupEngineState state) => Results.Ok(new
     CurrentOperation = state.CurrentOperation,
     LastSyncedFile = state.LastSyncedFile,
     QueueCount = state.ActiveUploadQueueCount,
-    WatchedFolders = state.ActiveWatchedPaths
+    WatchedFolders = state.ActiveWatchedPaths,
+    CurrentJob = state.CurrentJobId is null
+        ? null
+        : new
+        {
+            Id = state.CurrentJobId,
+            StartedAtUtc = state.CurrentJobStartedAtUtc,
+            WatchedFolderId = state.CurrentJobWatchedFolderId,
+            Provider = state.CurrentJobProvider,
+            AccountId = state.CurrentJobAccountId,
+            SyncEventId = state.CurrentJobSyncEventId
+        }
 }));
 
 // POST: React toggling the pause button
@@ -200,35 +211,72 @@ app.MapPost("/api/sync/trigger", async (
     SynchronizationService synchronizationService,
     CancellationToken cancellationToken) =>
 {
-    await synchronizationService.ExecuteSyncQueue(cancellationToken);
-    return Results.Ok(new { Message = "Sync completed or recorded unfinished work." });
+    try
+    {
+        await synchronizationService.ExecuteSyncQueue(cancellationToken);
+        return Results.Ok(new { Message = "Sync completed or recorded unfinished work." });
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem(
+            detail: ex.StackTrace,
+            instance: "api/sync/trigger",
+            statusCode: 500,
+            title: ex.Message
+        );
+    } 
 });
 
-app.MapPost("/api/sync/trigger/{watchedFolderId:long}/{provider}/{accountId}", async (
+// triggering a folder's sync for a specific provider/account cloud
+app.MapPost("/api/sync/trigger/{watchedFolderId:long}/{provider}/{accountId:string}", async (
     long watchedFolderId,
     Providers provider,
     string accountId,
     SynchronizationService synchronizationService,
     CancellationToken cancellationToken) =>
 {
-    await synchronizationService.ExecuteSyncQueue(
-        cancellationToken,
-        watchedFolderId,
-        provider,
-        accountId);
-    return Results.Ok(new { Message = "Cloud assignment executed." });
+    try
+    {
+        await synchronizationService.ExecuteSyncQueue(
+            cancellationToken,
+            watchedFolderId,
+            provider,
+            accountId);
+        return Results.Ok(new { Message = "Cloud assignment executed." });
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem(
+            detail: ex.StackTrace,
+            instance: $"api/sync/trigger/{watchedFolderId}/{provider}/{accountId}",
+            statusCode: 500,
+            title: ex.Message
+        );
+    }
 });
 
 // Sync a SyncEvent now
-app.MapPost("/api/syncevents/{syncEventId:long}/sync-now", async (
+app.MapPost("/api/syncevents/trigger/{syncEventId:long}", async (
     long syncEventId,
     SynchronizationService synchronizationService,
     CancellationToken cancellationToken) =>
 {
-    await synchronizationService.ExecuteSyncQueue(
-        cancellationToken,
-        syncEventId: syncEventId);
-    return Results.Ok(new { Message = "Sync event executed." });
+    try
+    {
+        await synchronizationService.ExecuteSyncQueue(
+            cancellationToken,
+            syncEventId: syncEventId);
+        return Results.Ok(new { Message = "Sync event executed." });
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem(
+            detail: ex.StackTrace,
+            instance: $"api/syncevents/trigger/{syncEventId}",
+            statusCode: 500,
+            title: ex.Message
+        );
+    }
 });
 
 // Skip a SyncEvent
