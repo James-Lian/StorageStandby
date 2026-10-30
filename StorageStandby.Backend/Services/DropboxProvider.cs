@@ -77,7 +77,9 @@ namespace StorageStandby.Backend.Services
             ?? throw new NullReferenceException(_tokenManager.NullReferenceExceptionMsg(Providers.Dropbox, accountId)));
 
             syncEvent.UnfinishedItems = string.Join(";", queue.Select(i => i.LocalPath));
-            syncEvent.UnfinishedItemIds = string.Join(";", queue.Select(i => i.Id));
+            syncEvent.UnfinishedItemIds = string.Join(";", queue
+                .Where(item => item.Id > 0)
+                .Select(item => item.Id));
 
             // retrieving matching watchedfolder using id and also load its associated cloud information
             var watchedFolder = await _db.WatchedFolders
@@ -114,7 +116,7 @@ namespace StorageStandby.Backend.Services
                     succeeded++;
                     syncEvent.SyncedItems = SyncEventPathHelper.AppendPath(syncEvent.SyncedItems, item.LocalPath);
                     syncEvent.UnfinishedItems = SyncEventPathHelper.RemovePath(syncEvent.UnfinishedItems, item.LocalPath);
-                    syncEvent.SyncedItemIds = SyncEventPathHelper.AppendPath(syncEvent.SyncedItemIds, item.Id.ToString());
+                    syncEvent.SyncedItemIds = SyncEventPathHelper.AppendId(syncEvent.SyncedItemIds, item.Id);
                     syncEvent.UnfinishedItemIds = SyncEventPathHelper.RemovePath(syncEvent.UnfinishedItemIds, item.Id.ToString());
                 }
                 catch (OperationCanceledException)
@@ -356,6 +358,17 @@ namespace StorageStandby.Backend.Services
                     Providers.Dropbox,
                     accountId))));
             string remotePath = "/" + folderName.Trim('/');
+            var existing = await FindChildByNameAsync(
+                client,
+                "/",
+                folderName.Trim('/'),
+                allowFiles: false,
+                cancellationToken);
+            if (existing is not null)
+            {
+                return existing.PathLower ?? existing.PathDisplay ?? remotePath;
+            }
+
             await client.Files.CreateFolderV2Async(new CreateFolderArg(remotePath, autorename: false));
             return remotePath;
         }

@@ -56,6 +56,12 @@ namespace StorageStandby.Backend.Services
                 : $"{current};{path}";
         }
 
+        // Bootstrap items are transient and do not have persisted queue IDs.
+        public static string AppendId(string current, long id)
+        {
+            return id > 0 ? AppendPath(current, id.ToString()) : current;
+        }
+
         // Removes a local path from a semicolon-delimited event path list.
         public static string RemovePath(string current, string path)
         {

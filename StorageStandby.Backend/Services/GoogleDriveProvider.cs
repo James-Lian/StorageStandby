@@ -116,7 +116,9 @@ namespace StorageStandby.Backend.Services
 
             // add unfinished items
             syncEvent.UnfinishedItems = string.Join(";", queue.Select(i => i.LocalPath));
-            syncEvent.UnfinishedItemIds = string.Join(";", queue.Select(i => i.Id));
+            syncEvent.UnfinishedItemIds = string.Join(";", queue
+                .Where(item => item.Id > 0)
+                .Select(item => item.Id));
 
             // building a Drive Client with currentAccessToken
             using var driveService = BuildDriveClient(
@@ -154,7 +156,7 @@ namespace StorageStandby.Backend.Services
                     succeeded++;
                     syncEvent.SyncedItems = SyncEventPathHelper.AppendPath(syncEvent.SyncedItems, item.LocalPath);
                     syncEvent.UnfinishedItems = SyncEventPathHelper.RemovePath(syncEvent.UnfinishedItems, item.LocalPath);
-                    syncEvent.SyncedItemIds = SyncEventPathHelper.AppendPath(syncEvent.SyncedItemIds, item.Id.ToString());
+                    syncEvent.SyncedItemIds = SyncEventPathHelper.AppendId(syncEvent.SyncedItemIds, item.Id);
                     syncEvent.UnfinishedItemIds = SyncEventPathHelper.RemovePath(syncEvent.UnfinishedItemIds, item.Id.ToString());
                 }
                 catch (OperationCanceledException)

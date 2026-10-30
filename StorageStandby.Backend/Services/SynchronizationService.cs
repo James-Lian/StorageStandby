@@ -41,7 +41,13 @@ namespace StorageStandby.Backend.Core
             string? accountId = null,
             long? syncEventId = null)
         {
+            // thread lock
             using var executionLease = await _state.AcquireSyncExecutionAsync(cancellationToken);
+            Guid jobId = _state.BeginSyncJob(
+                watchedFolderId,
+                provider,
+                accountId,
+                syncEventId);
             using var activeCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             lock (_activeSyncLock)
             {
@@ -65,6 +71,7 @@ namespace StorageStandby.Backend.Core
             }
             finally
             {
+                _state.EndSyncJob(jobId);
                 lock (_activeSyncLock)
                 {
                     if (ReferenceEquals(_activeSyncCancellation, activeCancellation))
@@ -93,6 +100,7 @@ namespace StorageStandby.Backend.Core
         // Finds altered folders, processes assignment lifecycle work, and synchronizes destinations
         private async Task ExecuteSyncQueueCore(
             CancellationToken cancellationToken,
+            // identifiers for targeted syncs
             long? watchedFolderId = null,
             Providers? provider = null,
             string? accountId = null,
@@ -103,18 +111,19 @@ namespace StorageStandby.Backend.Core
             await using var scope = _scopeFactory.CreateAsyncScope();
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
+            // pplling the sync queue for folder ids who've been altered
             var alteredFoldersIds = await db.PendingSyncQueue
-                .Select(i => i.WatchedFolderId)
+                .Select(i => i.WatchedFolderId) // projecting new sequence of ids
                 .Union(db.WatchedFolderUserCloudAssignments
-                    .Select(cloud => cloud.WatchedFolderId))
+                    .Select(cloud => cloud.WatchedFolderId)) // combine with ids of folders from pending cloud assignments
                 .Union(db.WatchedFolderUserCloudRemovalAssignments
-                    .Select(cloud => cloud.WatchedFolderId))
+                    .Select(cloud => cloud.WatchedFolderId)) // combine with ids of folders from pending removal cloud assignments
                 .Union(db.WatchedFolderCloudMetadata
                     .Where(cloud => cloud.State == CloudAssignmentState.PendingBootstrap
                         || cloud.State == CloudAssignmentState.Failed
                         || cloud.State == CloudAssignmentState.Removing)
-                    .Select(cloud => cloud.WatchedFolderId))
-                .Distinct()
+                    .Select(cloud => cloud.WatchedFolderId)) // combine with ids of folders from registered cloud assignments that are stuck in limbo
+                .Distinct() // returns only unique values
                 .ToListAsync(cancellationToken);
 
             if (watchedFolderId.HasValue)
@@ -122,6 +131,11 @@ namespace StorageStandby.Backend.Core
                 alteredFoldersIds = alteredFoldersIds
                     .Where(id => id == watchedFolderId.Value)
                     .ToList();
+                
+                if (alteredFoldersIds.Count == 0)
+                {
+                    throw new ArgumentException($"WatchedFolderId [{watchedFolderId}] has no pending sync operations.");
+                }
             }
 
             if (syncEventId.HasValue)
@@ -130,15 +144,23 @@ namespace StorageStandby.Backend.Core
                     .Where(item => item.Id == syncEventId.Value)
                     .Select(item => (long?)item.WatchedFolderId)
                     .SingleOrDefaultAsync(cancellationToken);
-                if (eventFolderId.HasValue && !alteredFoldersIds.Contains(eventFolderId.Value))
+                if (eventFolderId.HasValue)
                 {
-                    alteredFoldersIds.Add(eventFolderId.Value);
+                    alteredFoldersIds = [eventFolderId.Value];
+                } else
+                {
+                    throw new ArgumentException($"SyncEventId [{syncEventId}] does not seem to exist.");
                 }
             }
 
-            // 2. Iterate through them: choose a provider and an account, perform upload
+            // 2. Iterate through them:
+            // 2b. screen for cloud assignments changes (new additions/removals)
+            // |--> removal cloud assignments are performed at the start
+            // |--> new cloud assignments are bootstrapped
+            // 2a. choose a provider and an account, perform upload
             // |--> 1 SyncEvent per folder-provider-account combo
             // |--> SyncEvent created with: WatchedFolderId, Provider, AccountId
+            // |--> call appropriate Provider ExecuteAsync() 
 
             foreach (long id in alteredFoldersIds)
             {
@@ -154,21 +176,39 @@ namespace StorageStandby.Backend.Core
                     continue;
                 }
 
-                await ProcessRemovingCloudsAsync(db, watchedFolder, cancellationToken, provider, accountId);
+                Providers? effectiveProvider = provider;
+                string? effectiveAccountId = accountId;
+                if (syncEventId is not null)
+                {
+                    var syncEvent = await db.SyncEvents.SingleOrDefaultAsync(i => i.Id == syncEventId);
+                    if (syncEvent is not null)
+                    {
+                        effectiveProvider = syncEvent.Provider;
+                        effectiveAccountId = syncEvent.AccountId;
+                    }
+                }
+
+                // if an item is queued for a cloud removal, remove it now and delete local data (destinations)
+                // this way, we don't need to waste bandwidth updating a remote backup that is queued for deletion
+                await ProcessRemovingCloudsAsync(db, watchedFolder, cancellationToken, effectiveProvider, effectiveAccountId);
+                
                 if (string.IsNullOrWhiteSpace(watchedFolder.LocalPath))
                 {
                     continue;
                 }
 
+                // grab applicable PendingSyncItems for folderId
                 var queue = await db.PendingSyncQueue
                     .Where(item => item.WatchedFolderId == id)
                     .ToListAsync(cancellationToken);
+                // Returns existing remote locations and new locations awaiting bootstrap
                 var destinations = await DetermineSyncDestinations(watchedFolder, cancellationToken);
                 if (destinations.Count == 0)
                 {
                     continue;
                 }
 
+                // contains only registered remote locations
                 var activeDestinations = watchedFolder.AssignedClouds
                     .Where(cloud => cloud.State == CloudAssignmentState.Active)
                     .Select(cloud => new ProviderAccountCloud
@@ -178,20 +218,31 @@ namespace StorageStandby.Backend.Core
                     })
                     .DistinctBy(cloud => (cloud.Provider, cloud.AccountId))
                     .ToList();
-                var completedForAllDestinations = new HashSet<long>();
-                bool processedDestination = false;
+                // at least one destination has oustanding work to upload
+                bool hasDestinationWork = false;
+                bool completedDestination = false;
 
+                // for every destination
+                // 1. check cancellationToken
+                // 2. 
                 foreach (var destination in destinations)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
 
-                    if (provider.HasValue && destination.Provider != provider.Value
-                        || accountId is not null
-                        && !string.Equals(destination.AccountId, accountId, StringComparison.OrdinalIgnoreCase))
+                    // skip this destination if either its provider or account does not match the requested scope
+                    bool providerMismatch = effectiveProvider.HasValue
+                        && destination.Provider != effectiveProvider.Value;
+                    bool accountMismatch = effectiveAccountId is not null
+                        && !string.Equals(
+                            destination.AccountId,
+                            effectiveAccountId,
+                            StringComparison.OrdinalIgnoreCase);
+                    if (providerMismatch || accountMismatch) 
                     {
                         continue;
                     }
 
+                    // applicable cloud metadata for destination
                     var metadata = watchedFolder.AssignedClouds.SingleOrDefault(cloud =>
                         cloud.Provider == destination.Provider
                         && string.Equals(cloud.AccountId, destination.AccountId, StringComparison.OrdinalIgnoreCase));
@@ -213,7 +264,17 @@ namespace StorageStandby.Backend.Core
                         db.WatchedFolderCloudMetadata.Add(metadata);
                         await db.SaveChangesAsync(cancellationToken);
                     }
-                    bool isBootstrap = metadata.State != CloudAssignmentState.Active;
+                    bool isBootstrap = destination.Kind == SyncDestinationKind.Bootstrap;
+
+                    // if bootstrap:
+                    // |--> builds queue of PendingSyncItems with Created = true
+                    // else:
+                    // |--> finds the latest SyncEvent for the applicable folder/provider/account (cloud)
+                    // |--> reads SyncedItemIds, and removes those IDs from the folder's pending queue
+                    // |--> returns only items this specific cloud has not successfully received
+                    
+                    // Each cloud receives only it's own outstanding items
+                    // |--> useful for if a previous SyncEvent was interrupted or unfinished
                     List<PendingSyncItem> destinationQueue = isBootstrap
                         ? BuildBootstrapQueue(watchedFolder)
                         : await GetOutstandingQueueForCloudAsync(
@@ -222,10 +283,12 @@ namespace StorageStandby.Backend.Core
                             destination,
                             queue,
                             cancellationToken);
+                    // if the bootstrapped folder is empty OR the sync for that SyncEvent is complete
                     if (destinationQueue.Count == 0)
                     {
                         if (isBootstrap && Directory.Exists(watchedFolder.LocalPath))
                         {
+                            // creates the empty folder at the remote location
                             await ReconcileRemoteFolderAsync(
                                 db,
                                 watchedFolder,
@@ -247,7 +310,6 @@ namespace StorageStandby.Backend.Core
                         continue;
                     }
 
-                    processedDestination = true;
                     metadata.State = isBootstrap
                         ? CloudAssignmentState.Bootstrapping
                         : CloudAssignmentState.Active;
@@ -266,19 +328,22 @@ namespace StorageStandby.Backend.Core
                         continue;
                     }
 
-                    syncEvent ??= new SyncEvent
-                    {
-                        WatchedFolderId = id,
-                        Provider = destination.Provider,
-                        AccountId = destination.AccountId,
-                        ScheduledTimestamp = DateTime.UtcNow,
-                        CompletionType = SyncEventType.Upcoming
-                    };
+                    if (syncEvent is null) {
+                        syncEvent = new SyncEvent
+                        {
+                            WatchedFolderId = id,
+                            Provider = destination.Provider,
+                            AccountId = destination.AccountId,
+                            ScheduledTimestamp = DateTime.UtcNow,
+                            CompletionType = SyncEventType.Upcoming
+                        };
+                    }
                     if (syncEvent.Id == 0)
                     {
                         db.SyncEvents.Add(syncEvent);
                     }
                     await db.SaveChangesAsync(cancellationToken);
+                    hasDestinationWork = true;
 
                     try
                     {
@@ -326,6 +391,7 @@ namespace StorageStandby.Backend.Core
                         syncEvent.CompletedTimestamp = DateTime.UtcNow;
                         if (result.Status == SyncEventType.Succeeded)
                         {
+                            completedDestination = true;
                             metadata.State = CloudAssignmentState.Active;
                             var completedAssignments = watchedFolder.UserAssignedClouds.Where(item =>
                                 item.WatchedFolderId == id
@@ -336,13 +402,6 @@ namespace StorageStandby.Backend.Core
                                     StringComparison.OrdinalIgnoreCase))
                                 .ToList();
                             db.WatchedFolderUserCloudAssignments.RemoveRange(completedAssignments);
-                            if (!isBootstrap)
-                            {
-                                foreach (var item in destinationQueue)
-                                {
-                                    completedForAllDestinations.Add(item.Id);
-                                }
-                            }
                         }
                         else
                         {
@@ -370,7 +429,7 @@ namespace StorageStandby.Backend.Core
                     await db.SaveChangesAsync(cancellationToken);
                 }
 
-                if (processedDestination && activeDestinations.Count > 0)
+                if (hasDestinationWork && activeDestinations.Count > 0)
                 {
                     var successfulClouds = await GetSuccessfulCloudsForItemsAsync(
                         db,
@@ -385,7 +444,7 @@ namespace StorageStandby.Backend.Core
                     db.PendingSyncQueue.RemoveRange(queue.Where(item => completedItemIds.Contains(item.Id)));
                 }
 
-                if (processedDestination && watchedFolder.AssignedClouds.Any(cloud =>
+                if (completedDestination && watchedFolder.AssignedClouds.Any(cloud =>
                         cloud.State == CloudAssignmentState.Active))
                 {
                     watchedFolder.LastSync = DateTime.UtcNow;
@@ -395,7 +454,6 @@ namespace StorageStandby.Backend.Core
                     await db.SaveChangesAsync(cancellationToken);
                 }
             }
-
         }
 
         // Builds a full-folder upload queue for a newly assigned cloud destination
@@ -707,8 +765,8 @@ namespace StorageStandby.Backend.Core
             }
         }
 
-        // Returns distinct cloud destinations that are configured for the folder
-        public async Task<List<ProviderAccountCloud>> DetermineSyncDestinations(
+        // Returns distinct existing and bootstrap destinations configured for the folder
+        public async Task<List<SyncDestination>> DetermineSyncDestinations(
             WatchedFolder folder,
             CancellationToken cancellationToken = default)
         {
@@ -718,20 +776,26 @@ namespace StorageStandby.Backend.Core
                 .Where(cloud => cloud.State != CloudAssignmentState.Removing
                     && cloud.State != CloudAssignmentState.Unlinked
                     && !string.IsNullOrWhiteSpace(cloud.AccountId))
-                .Select(cloud => new ProviderAccountCloud
+                .Select(cloud => new SyncDestination
                 {
                     Provider = cloud.Provider,
-                    AccountId = cloud.AccountId
+                    AccountId = cloud.AccountId,
+                    Kind = cloud.State == CloudAssignmentState.Active
+                        ? SyncDestinationKind.Existing
+                        : SyncDestinationKind.Bootstrap
                 })
                 .Concat(folder.UserAssignedClouds
                     .Where(cloud => !string.IsNullOrWhiteSpace(cloud.AccountId))
-                    .Select(cloud => new ProviderAccountCloud
+                    .Select(cloud => new SyncDestination
                     {
                         Provider = cloud.Provider,
-                        AccountId = cloud.AccountId
+                        AccountId = cloud.AccountId,
+                        Kind = SyncDestinationKind.Bootstrap
                     }))
                 .GroupBy(cloud => (cloud.Provider, AccountId: cloud.AccountId.ToUpperInvariant()))
-                .Select(group => group.First())
+                .Select(group => group
+                    .OrderByDescending(cloud => cloud.Kind)
+                    .First())
                 .ToList();
         }
 
@@ -1225,8 +1289,29 @@ namespace StorageStandby.Backend.Core
                 if (pendingRemoval is not null)
                 {
                     persistedFolder.UserCloudRemovalAssignments.Remove(pendingRemoval);
-                    await db.SaveChangesAsync(cancellationToken);
                 }
+
+                if (assignedCloud.State is CloudAssignmentState.Failed
+                    or CloudAssignmentState.PendingBootstrap
+                    or CloudAssignmentState.Bootstrapping
+                    or CloudAssignmentState.Unlinked)
+                {
+                    assignedCloud.State = CloudAssignmentState.PendingBootstrap;
+                    assignedCloud.LastError = null;
+                    if (!persistedFolder.UserAssignedClouds.Any(cloud =>
+                            cloud.Provider == provider
+                            && string.Equals(cloud.AccountId, accountId, StringComparison.OrdinalIgnoreCase)))
+                    {
+                        persistedFolder.UserAssignedClouds.Add(new WatchedFolderUserCloudAssignment
+                        {
+                            Provider = provider,
+                            AccountId = accountId,
+                            WatchedFolderId = persistedFolder.Id
+                        });
+                    }
+                }
+
+                await db.SaveChangesAsync(cancellationToken);
                 return;
             }
 
