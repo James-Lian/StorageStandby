@@ -98,7 +98,9 @@ namespace StorageStandby.Backend.Services
             ArgumentNullException.ThrowIfNull(queue);
             
             syncEvent.UnfinishedItems = string.Join(";", queue.Select(i => i.LocalPath));
-            syncEvent.UnfinishedItemIds = string.Join(";", queue.Select(i => i.Id));
+            syncEvent.UnfinishedItemIds = string.Join(";", queue
+                .Where(item => item.Id > 0)
+                .Select(item => item.Id));
 
             // retrieving matching watchedfolder using id and also load its associated cloud information
             var watchedFolder = await _db.WatchedFolders
@@ -137,7 +139,7 @@ namespace StorageStandby.Backend.Services
                     succeeded++;
                     syncEvent.SyncedItems = SyncEventPathHelper.AppendPath(syncEvent.SyncedItems, item.LocalPath);
                     syncEvent.UnfinishedItems = SyncEventPathHelper.RemovePath(syncEvent.UnfinishedItems, item.LocalPath);
-                    syncEvent.SyncedItemIds = SyncEventPathHelper.AppendPath(syncEvent.SyncedItemIds, item.Id.ToString());
+                    syncEvent.SyncedItemIds = SyncEventPathHelper.AppendId(syncEvent.SyncedItemIds, item.Id);
                     syncEvent.UnfinishedItemIds = SyncEventPathHelper.RemovePath(syncEvent.UnfinishedItemIds, item.Id.ToString());
                 }
                 catch (OperationCanceledException)
@@ -448,16 +450,22 @@ namespace StorageStandby.Backend.Services
                 driveId,
                 "root",
                 folderName,
-                allowFiles: false,
+                allowFiles: true,
                 cancellationToken);
             if (existing.Count > 1)
             {
                 throw new InvalidOperationException(
-                    $"Multiple OneDrive folders named '{folderName}' exist at the root.");
+                    $"Multiple OneDrive items named '{folderName}' exist at the root.");
             }
 
             if (existing.Count == 1)
             {
+                if (existing[0].Folder is null)
+                {
+                    throw new InvalidOperationException(
+                        $"A OneDrive file named '{folderName}' already exists at the root, so the bootstrap folder cannot be created.");
+                }
+
                 return existing[0].Id
                     ?? throw new InvalidOperationException(
                         $"OneDrive did not return an ID for the existing folder '{folderName}'.");
