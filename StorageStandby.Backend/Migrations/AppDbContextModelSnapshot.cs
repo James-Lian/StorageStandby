@@ -159,6 +159,56 @@ namespace StorageStandby.Backend.Migrations
                         });
                 });
 
+            modelBuilder.Entity("StorageStandby.Backend.Models.TimelineEvent", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("AccountId")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Action")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Details")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("LocalPath")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Message")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("OccurredAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<long?>("PendingSyncItemId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int?>("Provider")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long?>("SyncEventId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("Type")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long>("WatchedFolderId")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("SyncEventId");
+
+                    b.HasIndex("WatchedFolderId", "OccurredAtUtc");
+
+                    b.ToTable("TimelineEvents");
+                });
+
             modelBuilder.Entity("StorageStandby.Backend.Models.UntrackedPath", b =>
                 {
                     b.Property<long>("Id")
@@ -347,6 +397,20 @@ namespace StorageStandby.Backend.Migrations
                         });
 
                     b.Navigation("FailedItems");
+                });
+
+            modelBuilder.Entity("StorageStandby.Backend.Models.TimelineEvent", b =>
+                {
+                    b.HasOne("StorageStandby.Backend.Models.SyncEvent", null)
+                        .WithMany()
+                        .HasForeignKey("SyncEventId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.HasOne("StorageStandby.Backend.Models.WatchedFolder", null)
+                        .WithMany()
+                        .HasForeignKey("WatchedFolderId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
                 });
 
             modelBuilder.Entity("StorageStandby.Backend.Models.UntrackedPath", b =>
