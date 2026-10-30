@@ -17,8 +17,7 @@ namespace StorageStandby.Backend.Data
 
         // Yo reconsider this portion:
         public DbSet<SyncEvent> SyncEvents { get; set; }
-        public DbSet<SyncOperation> SyncOperations { get; set; }
-
+        public DbSet<TimelineEvent> TimelineEvents { get; set; }
         public DbSet<PendingSyncItem> PendingSyncQueue { get; set; }
         public DbSet<UntrackedPath> UntrackedPaths { get; set; }
 
@@ -53,6 +52,24 @@ namespace StorageStandby.Backend.Data
                     failedItem.Property(item => item.Id).ValueGeneratedNever();
                     failedItem.HasKey("SyncEventId", "Id");
                 });
+
+            modelBuilder.Entity<TimelineEvent>()
+                .HasIndex(item => new { item.WatchedFolderId, item.OccurredAtUtc });
+
+            modelBuilder.Entity<TimelineEvent>()
+                .HasIndex(item => item.SyncEventId);
+
+            modelBuilder.Entity<TimelineEvent>()
+                .HasOne<WatchedFolder>()
+                .WithMany()
+                .HasForeignKey(item => item.WatchedFolderId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            modelBuilder.Entity<TimelineEvent>()
+                .HasOne<SyncEvent>()
+                .WithMany()
+                .HasForeignKey(item => item.SyncEventId)
+                .OnDelete(DeleteBehavior.SetNull);
 
             modelBuilder.Entity<UntrackedPath>()
                 .HasIndex(path => new { path.WatchedFolderId, path.LocalPath })

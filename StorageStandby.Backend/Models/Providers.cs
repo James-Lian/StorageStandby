@@ -16,6 +16,17 @@ namespace StorageStandby.Backend.Models
         Reauthenticate = 2
     }
 
+    public enum SyncDestinationKind
+    {
+        Existing = 0,
+        Bootstrap = 1
+    }
+
+    public class SyncDestination : ProviderAccountCloud
+    {
+        public SyncDestinationKind Kind { get; set; }
+    }
+
     public class ProviderAccountCloud
     {
         public Providers Provider { get; set; }
