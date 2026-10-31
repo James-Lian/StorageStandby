@@ -308,20 +308,11 @@ namespace StorageStandby.Desktop
             // This tells WebView2: "If someone visits http://app.local, serve files from this physical folder."
             string virtualHostFolderPath = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "dist");
 
-//#if DEBUG
-//            // In DEBUG mode, dist doesn't exist yet, so use base directory as fallback
-//            // (The WebResourceRequested handler will intercept requests anyway)
-//            if (!Directory.Exists(virtualHostFolderPath))
-//            {
-//                virtualHostFolderPath = AppDomain.CurrentDomain.BaseDirectory;
-//            }
-//#endif
-
-//            webView.CoreWebView2.SetVirtualHostNameToFolderMapping(
-//                "storagestandby.local",
-//                virtualHostFolderPath,
-//                Microsoft.Web.WebView2.Core.CoreWebView2HostResourceAccessKind.Allow
-//            );
+           webView.CoreWebView2.SetVirtualHostNameToFolderMapping(
+               "storagestandby.local",
+               virtualHostFolderPath,
+               Microsoft.Web.WebView2.Core.CoreWebView2HostResourceAccessKind.Allow
+           );
 
 #if DEBUG
             // In Development (F5), use Vite's live server for instant hot-reloading
