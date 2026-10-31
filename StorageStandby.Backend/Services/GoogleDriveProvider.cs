@@ -364,6 +364,7 @@ namespace StorageStandby.Backend.Services
             var request = driveService.Files.Update(new Google.Apis.Drive.v3.Data.File(), remoteItem.Id);
             request.AddParents = destinationParent.Id;
             request.RemoveParents = oldParent;
+            request.Fields = "id";
             await request.ExecuteAsync(cancellationToken);
         }
 
@@ -375,9 +376,11 @@ namespace StorageStandby.Backend.Services
             CancellationToken cancellationToken)
         {
             // 
-            await driveService.Files.Update(
-                new Google.Apis.Drive.v3.Data.File { Name = newName }, remoteId)
-                .ExecuteAsync(cancellationToken);
+            var request = driveService.Files.Update(
+                new Google.Apis.Drive.v3.Data.File { Name = newName },
+                remoteId);
+            request.Fields = "id";
+            await request.ExecuteAsync(cancellationToken);
         }
 
         // Creates each missing folder in a local path beneath the remote root.
@@ -477,11 +480,13 @@ namespace StorageStandby.Backend.Services
             if (existingId == null)
             {
                 var request = driveService.Files.Create(metadata, stream, "application/octet-stream");
+                request.Fields = "id";
                 progress = await request.UploadAsync(cancellationToken);
             }
             else
             {
                 var request = driveService.Files.Update(metadata, existingId, stream, "application/octet-stream");
+                request.Fields = "id";
                 progress = await request.UploadAsync(cancellationToken);
             }
 
@@ -550,7 +555,10 @@ namespace StorageStandby.Backend.Services
             CancellationToken cancellationToken = default)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(accountId);
-            ArgumentException.ThrowIfNullOrWhiteSpace(remoteFolderId);
+            if (string.IsNullOrWhiteSpace(remoteFolderId))
+            {
+                return false;
+            }
 
             string accessToken = await _tokenManager.GetValidAccessTokenAsync(
                 Providers.Google,
@@ -668,7 +676,9 @@ namespace StorageStandby.Backend.Services
                 refreshToken,
                 accountId);
             await EnsureStorageStandbyRootFolderAsync(driveService, cancellationToken);
-            var about = await driveService.About.Get().ExecuteAsync(cancellationToken);
+            var aboutRequest = driveService.About.Get();
+            aboutRequest.Fields = "storageQuota(limit,usage)";
+            var about = await aboutRequest.ExecuteAsync(cancellationToken);
 
             ulong limit = (ulong)(about.StorageQuota?.Limit ?? 0L);
             ulong usage = (ulong)(about.StorageQuota?.Usage ?? 0L);
