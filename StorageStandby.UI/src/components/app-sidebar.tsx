@@ -132,9 +132,19 @@ export function AppSidebar() {
                         <SidebarMenu>
                             <SidebarMenuItem>
                                 <SidebarMenuButton asChild>
-                                    <a>
-                                        <FileQuestion/> <span>How to use</span>
-                                    </a>
+                                    <Button
+                                        variant={"link"}
+                                        className="items-center justify-start cursor-pointer"
+                                        onClick={() => {
+                                            openInDefaultBrowser("https://github.com/James-Lian/StorageStandby/blob/main/HOWTOUSE.md")
+                                            notifyInfo({ 
+                                                title: "URL opened", 
+                                                summary: `Open your browser to view the Guide`
+                                            })
+                                        }}
+                                    >
+                                        <Info /><span>How to use</span>
+                                    </Button>
                                 </SidebarMenuButton>
                                 <SidebarMenuButton asChild>
                                     <Button
