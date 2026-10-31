@@ -54,7 +54,7 @@ function App() {
 						<main className="flex-1 p-4 pb-24">
 							<SidebarTrigger />
 							<Routes>
-								<Route path="/" element={<Dashboard />} />
+								{/* <Route path="/" element={<Dashboard />} /> */}
 								<Route path="/folders" element={<Folders />} />
 								<Route path="/Sync" element={<Sync />} />
 								<Route path="/Link" element={<Link />} />

@@ -52,13 +52,13 @@ export function AppSidebar() {
                     <SidebarGroup>
                         <SidebarGroupLabel>Home</SidebarGroupLabel>
                         <SidebarMenu>
-                            <SidebarMenuItem>
+                            {/* <SidebarMenuItem>
                                 <SidebarMenuButton asChild>
                                     <Link to="/">
                                         <LayoutDashboard /> <span>Dashboard</span>
                                     </Link>
                                 </SidebarMenuButton>
-                            </SidebarMenuItem>
+                            </SidebarMenuItem> */}
                             <SidebarMenuItem>
                                 <SidebarMenuButton asChild>
                                     <Link to="/folders">
