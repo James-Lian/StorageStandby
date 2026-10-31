@@ -11,19 +11,25 @@ export function cn(...inputs: ClassValue[]) {
 export const getFolderName = (folder: WatchedFolder) =>
     folder.localPath?.split(/[\\/]/).filter(Boolean).pop() ?? "Unnamed folder"
 
+function parseBackendUtcDate(value: string) {
+    const hasTimezone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(value)
+    const normalizedValue = hasTimezone ? value : `${value}Z`
+    return new Date(normalizedValue)
+}
+
 export const formatLocalDateTime = (value: string | null | undefined) =>
     value
         ? new Intl.DateTimeFormat(undefined, {
             dateStyle: "medium",
             timeStyle: "short",
-        }).format(new Date(value))
+        }).format(parseBackendUtcDate(value))
         : "Never"
 
 export const formatLocalDate = (value: string | null | undefined) =>
     value
         ? new Intl.DateTimeFormat(undefined, {
             dateStyle: "medium",
-        }).format(new Date(value))
+        }).format(parseBackendUtcDate(value))
         : "Unknown date"
 
 export const handleOpenExplorer = (path: string | null) => {
