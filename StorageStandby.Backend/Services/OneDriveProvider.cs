@@ -399,7 +399,9 @@ namespace StorageStandby.Backend.Services
                 return;
             }
 
-            string remotePath = Uri.EscapeDataString(Path.GetFileName(localPath));
+            // ItemWithPath builds and encodes the Graph path. Passing an already escaped
+            // name can double-encode spaces and other characters.
+            string remotePath = Path.GetFileName(localPath);
             await graphService.Drives[driveId].Items[parentId].ItemWithPath(remotePath).Content.PutAsync(
                 stream, cancellationToken: cancellationToken);
         }
@@ -445,10 +447,16 @@ namespace StorageStandby.Backend.Services
             string driveId = (await graphService.Me.Drive.GetAsync(cancellationToken: cancellationToken))?.Id
                 ?? throw new InvalidOperationException("Microsoft Graph did not return the OneDrive ID.");
 
+            var appRoot = await graphService.Drives[driveId]
+                .Special["approot"]
+                .GetAsync(cancellationToken: cancellationToken);
+            string appRootId = appRoot?.Id
+                ?? throw new InvalidOperationException("Microsoft Graph did not return the OneDrive app-folder ID.");
+
             var existing = await FindChildrenByNameAsync(
                 graphService,
                 driveId,
-                "root",
+                appRootId,
                 folderName,
                 allowFiles: true,
                 cancellationToken);
@@ -471,7 +479,7 @@ namespace StorageStandby.Backend.Services
                         $"OneDrive did not return an ID for the existing folder '{folderName}'.");
             }
 
-            var created = await graphService.Drives[driveId].Items["root"].Children.PostAsync(
+            var created = await graphService.Drives[driveId].Items[appRootId].Children.PostAsync(
                 new DriveItem
                 {
                     Name = folderName,
@@ -481,6 +489,34 @@ namespace StorageStandby.Backend.Services
 
             return created?.Id
                 ?? throw new InvalidOperationException("OneDrive did not return a remote root ID.");
+        }
+
+        public async Task<bool> RemoteFolderExistsAsync(
+            string accountId,
+            string remoteFolderId,
+            CancellationToken cancellationToken = default)
+        {
+            if (string.IsNullOrWhiteSpace(remoteFolderId))
+            {
+                return false;
+            }
+
+            var graphService = BuildGraphClient(accountId);
+            string driveId = (await graphService.Me.Drive.GetAsync(cancellationToken: cancellationToken))?.Id
+                ?? throw new InvalidOperationException("Microsoft Graph did not return the OneDrive ID.");
+            try
+            {
+                var remoteFolder = await graphService.Drives[driveId].Items[remoteFolderId]
+                    .GetAsync(requestConfiguration =>
+                    {
+                        requestConfiguration.QueryParameters.Select = ["id", "folder", "file"];
+                    }, cancellationToken);
+                return remoteFolder?.Folder is not null;
+            }
+            catch (ApiException ex) when (ex.ResponseStatusCode == 404)
+            {
+                return false;
+            }
         }
 
         public async Task DeleteRemoteRootFolderAsync(

@@ -373,6 +373,34 @@ namespace StorageStandby.Backend.Services
             return remotePath;
         }
 
+        public async Task<bool> RemoteFolderExistsAsync(
+            string accountId,
+            string remoteFolderPath,
+            CancellationToken cancellationToken = default)
+        {
+            if (string.IsNullOrWhiteSpace(remoteFolderPath))
+            {
+                return false;
+            }
+
+            using var client = CreateDropboxClient(_tokenManager.UnencryptRefreshToken(
+                await _tokenManager.GetRefreshTokenAsync(Providers.Dropbox, accountId)
+                ?? throw new NullReferenceException(_tokenManager.NullReferenceExceptionMsg(
+                    Providers.Dropbox,
+                    accountId))));
+            try
+            {
+                var metadata = await client.Files.GetMetadataAsync(remoteFolderPath);
+                return metadata.IsFolder;
+            }
+            catch (ApiException<GetMetadataError> ex)
+                when (ex.ErrorResponse.IsPath
+                    && ex.ErrorResponse.AsPath.Value.IsNotFound)
+            {
+                return false;
+            }
+        }
+
         public async Task DeleteRemoteRootFolderAsync(
             string accountId,
             string remoteFolderPath,
