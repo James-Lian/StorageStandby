@@ -16,7 +16,7 @@ import {
 import { fetchDirectoryTree } from "@/api/data"
 import { fetchIgnoredPaths } from "@/api/utils"
 import type { DirectoryNode } from "@/types/data"
-import { cn } from "@/lib/utils"
+import { cn, formatLocalDate } from "@/lib/utils"
 import { usePendingSyncItems } from "@/lib/pending-sync-items"
 
 interface DirectoryTreeDialogProps {
@@ -97,7 +97,7 @@ export function DirectoryTreeDialog({
                 <DialogHeader>
                     <DialogTitle>Folder contents</DialogTitle>
                     <DialogDescription className="truncate" title={folderPath ?? undefined}>
-                        {folderPath ?? "No folder selected"}{dateAdded != null ? `, added ${dateAdded.substring(0, dateAdded.indexOf("T"))}` : ""}
+                        {folderPath ?? "No folder selected"}{dateAdded != null ? `, added ${formatLocalDate(dateAdded)}` : ""}
                     </DialogDescription>
                 </DialogHeader>
                 <DirectoryTreeContent

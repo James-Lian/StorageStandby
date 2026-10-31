@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Ellipsis, Pause, Play, RefreshCw } from "lucide-react"
-import { cn, getFolderName, handleOpenExplorer } from "@/lib/utils"
+import { cn, formatLocalDateTime, getFolderName, handleOpenExplorer } from "@/lib/utils"
 import {
     pauseCurrentSync,
     removeFolderCloud,
@@ -375,7 +375,7 @@ export function Sync() {
                                             </Badge>
                                         </TableCell>
                                         <TableCell>
-                                            {row.folder.nextSyncAt ? new Date(row.folder.nextSyncAt).toLocaleString() : "Due now"}
+                                            {row.folder.nextSyncAt ? formatLocalDateTime(row.folder.nextSyncAt) : "Due now"}
                                         </TableCell>
                                         <TableCell>
                                             <Badge variant="outline">Pending</Badge>
@@ -482,7 +482,7 @@ export function Sync() {
                                 <TableCell>{getProviderDisplayName(row.provider)}</TableCell>
                                 <TableCell>{row.email}</TableCell>
                                 <TableCell>{row.pendingCount}</TableCell>
-                                <TableCell>{row.nextSyncAt ? new Date(row.nextSyncAt).toLocaleString() : "Due now"}</TableCell>
+                                <TableCell>{row.nextSyncAt ? formatLocalDateTime(row.nextSyncAt) : "Due now"}</TableCell>
                                 <TableCell className="text-right">
                                     <DropdownMenu> 
                                         <DropdownMenuTrigger asChild>
