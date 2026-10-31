@@ -50,7 +50,7 @@ builder.Services.AddDbContext<AppDbContext>(options =>
 {
     // Tells EF Core to use SQLite and names the database file
     var databasePath = Path.Combine(storageStandbyDataPath, "storagestandby.db");
-    options.UseSqlite($"Data Source={databasePath};Journal Mode=WAL;");
+    options.UseSqlite($"Data Source={databasePath}");
 });
 builder.Services.AddScoped<GoogleDriveProvider>();
 builder.Services.AddScoped<OneDriveProvider>();

@@ -111,9 +111,8 @@ namespace StorageStandby.Backend.Data
                 string appFolder = Path.Combine(folder, "StorageStandby");
                 Directory.CreateDirectory(appFolder);
 
-                // Appending Journal Mode=WAL enables Write-Ahead Logging automatically
                 string dbPath = Path.Combine(appFolder, "backup_config.db");
-                optionsBuilder.UseSqlite($"Data Source={dbPath};Journal Mode=WAL;");
+                optionsBuilder.UseSqlite($"Data Source={dbPath}");
             }
         }
     }
