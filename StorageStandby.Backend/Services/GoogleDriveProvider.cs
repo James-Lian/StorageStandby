@@ -79,7 +79,7 @@ namespace StorageStandby.Backend.Services
                     ClientSecrets = new ClientSecrets
                     {
                         ClientId = _configuration["GoogleOAuth:ClientId"],
-                        ClientSecret = _configuration["GoogleOAuth:ClientSecret"]
+                        ClientSecret = string.Empty
                     }
                 }),
                 userId, // <-- for automatic store management
@@ -718,8 +718,6 @@ namespace StorageStandby.Backend.Services
             // Load oAuth credentials from configuration
             string clientId = _configuration["GoogleOAuth:ClientId"]
                 ?? throw new InvalidOperationException("Google Client ID not configured.");
-            string clientSecret = _configuration["GoogleOAuth:ClientSecret"]
-                ?? throw new InvalidOperationException("Google Client Secret not configured.");
 
             // Find an available port dynamically
             int port = GetAvailablePort(5431);
@@ -838,7 +836,6 @@ namespace StorageStandby.Backend.Services
                 var tokenRequestParams = new Dictionary<string, string>
                 {
                     { "client_id", clientId },
-                    { "client_secret", clientSecret  },
                     { "code", code },
                     { "code_verifier", codeVerifier },
                     { "grant_type", "authorization_code" },

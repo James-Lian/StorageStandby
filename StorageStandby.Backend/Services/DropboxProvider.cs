@@ -48,17 +48,13 @@ namespace StorageStandby.Backend.Services
 
         public DropboxClient CreateDropboxClient(string refreshToken)
         {
-            // load oAuth credentials from configuration
-            string clientId = _configuration["DropboxOAuth:AppKey"] 
-                ?? throw new InvalidOperationException("Dropbox Client ID not configured.");
-            string clientSecret = _configuration["DropboxOAuth:AppSecret"]
-                ?? throw new InvalidOperationException("Dropbox Client Secret not configured.");
+            string clientId = _configuration["DropboxOAuth:AppKey"]
+                ?? throw new InvalidOperationException("Dropbox client ID not configured.");
 
             // dropbox sdk automatically intercepts 401 errors, fetches a new access token, and retries failed file operation seamlessly
             return new DropboxClient(
                 refreshToken, 
-                clientId, 
-                clientSecret);
+                clientId);
         }
 
         public async Task<SyncResult> ExecuteSyncQueueAsync(

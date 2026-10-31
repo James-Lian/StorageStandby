@@ -52,6 +52,13 @@ namespace StorageStandby.Backend.Models
 
         }.ToFrozenDictionary();
 
+        public static readonly FrozenDictionary<Providers, string> ClientIdConfigurationKeys = new Dictionary<Providers, string>
+        {
+            { Providers.Google, "GoogleOAuth:ClientId" },
+            { Providers.Microsoft, "MicrosoftOAuth:ClientID" },
+            { Providers.Dropbox, "DropboxOAuth:AppKey" },
+        }.ToFrozenDictionary();
+
         public static readonly FrozenDictionary<Providers, string> TokenRevocationEndpoints = new Dictionary<Providers, string>
         {
             { Providers.Google, "https://oauth2.googleapis.com/revoke" },

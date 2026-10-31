@@ -198,7 +198,9 @@ public class TokenManager
         string refreshToken = protector.Unprotect(tokenRecord.EncryptedRefreshToken);
 
         // 3. Exchange the refresh token at the provider's token endpoint.
-        string clientId = _config[$"{ProviderMetadata.ProviderNames[provider]}OAuth:ClientId"]!;
+        string clientIdConfigurationKey = ProviderMetadata.ClientIdConfigurationKeys[provider];
+        string clientId = _config[clientIdConfigurationKey]
+            ?? throw new InvalidOperationException($"{ProviderMetadata.ProviderNames[provider]} client ID not configured.");
 
         var httpClient = _httpClientFactory.CreateClient(ProviderMetadata.ProviderNames[provider]);
 
@@ -208,14 +210,6 @@ public class TokenManager
             { "refresh_token", refreshToken },
             { "grant_type", "refresh_token" } // Notice grant_type here!
         };
-
-        if (provider != Providers.Microsoft)
-        {
-            refreshTokenParameters["client_secret"] = _config[
-                $"{ProviderMetadata.ProviderNames[provider]}OAuth:ClientSecret"]
-                ?? throw new InvalidOperationException(
-                    $"{ProviderMetadata.ProviderNames[provider]} client secret not configured.");
-        }
 
         var requestBody = new FormUrlEncodedContent(refreshTokenParameters);
 
