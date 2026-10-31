@@ -26,6 +26,7 @@ namespace StorageStandby.Desktop
     public partial class MainWindow : Window
     {
         private HttpClient? _pipeClient;
+        private Process? _backendProcess;
         private readonly Forms.NotifyIcon _trayIcon;
         private bool _isExiting;
 
@@ -36,6 +37,9 @@ namespace StorageStandby.Desktop
                 Debug.WriteLine("[MainWindow] Initializing MainWindow");
                 InitializeComponent();
                 _trayIcon = CreateTrayIcon();
+#if !DEBUG
+                StartBackendProcess();
+#endif
                 _ = InitializeWebViewBridge();  
             }
             catch (Exception ex)
@@ -85,6 +89,28 @@ namespace StorageStandby.Desktop
             Close();
         }
 
+        private void StartBackendProcess()
+        {
+            string backendPath = System.IO.Path.GetFullPath(System.IO.Path.Combine(
+                AppContext.BaseDirectory,
+                "..",
+                "Backend",
+                "StorageStandby.Backend.exe"));
+
+            if (!File.Exists(backendPath))
+            {
+                throw new FileNotFoundException("StorageStandby backend was not found.", backendPath);
+            }
+
+            _backendProcess = Process.Start(new ProcessStartInfo
+            {
+                FileName = backendPath,
+                WorkingDirectory = System.IO.Path.GetDirectoryName(backendPath)!,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            });
+        }
+
         protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
         {
             if (!_isExiting)
@@ -104,6 +130,12 @@ namespace StorageStandby.Desktop
 
         protected override void OnClosed(EventArgs e)
         {
+            if (_backendProcess is { HasExited: false })
+            {
+                _backendProcess.Kill(entireProcessTree: true);
+                _backendProcess.Dispose();
+            }
+
             _trayIcon.Visible = false;
             _trayIcon.Dispose();
             base.OnClosed(e);
@@ -129,7 +161,7 @@ namespace StorageStandby.Desktop
                         PipeOptions.Asynchronous
                     );
 
-                    await pipeClientStream.ConnectAsync(2000, cancellationToken);
+                    await pipeClientStream.ConnectAsync(30000, cancellationToken);
                     return pipeClientStream;
                 }
             };
