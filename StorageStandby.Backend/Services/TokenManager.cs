@@ -211,6 +211,12 @@ public class TokenManager
             { "grant_type", "refresh_token" } // Notice grant_type here!
         };
 
+        if (provider == Providers.Google)
+        {
+            refreshTokenParameters["client_secret"] = _config["GoogleOAuth:ClientSecret"]
+                ?? throw new InvalidOperationException("Google Client Secret not configured.");
+        }
+
         var requestBody = new FormUrlEncodedContent(refreshTokenParameters);
 
         string tokenEndpoint = ProviderMetadata.TokenEndpoints[provider];
