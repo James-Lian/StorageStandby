@@ -406,7 +406,9 @@ namespace StorageStandby.Backend.Services
                     MimeType = "application/vnd.google-apps.folder",
                     Parents = new List<string> { parentId }
                 };
-                var created = await driveService.Files.Create(metadata).ExecuteAsync(cancellationToken);
+                var request = driveService.Files.Create(metadata);
+                request.Fields = "id";
+                var created = await request.ExecuteAsync(cancellationToken);
                 parentId = created.Id;
             }
         }
