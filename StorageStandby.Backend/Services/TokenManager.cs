@@ -124,7 +124,10 @@ public class TokenManager
 
     public string UnencryptRefreshToken(CloudToken token)
     {
-        return _dataProtector.CreateProtector("GoogleTokenProtector").Unprotect(token.EncryptedRefreshToken);
+        Providers provider = token.Provider
+            ?? throw new InvalidOperationException("Cloud token does not have a provider.");
+        string protectorName = $"{ProviderMetadata.ProviderNames[provider]}TokenProtector";
+        return _dataProtector.CreateProtector(protectorName).Unprotect(token.EncryptedRefreshToken);
     }
 
     // DEV: SQL Update equivalent
