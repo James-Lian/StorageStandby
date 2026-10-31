@@ -18,7 +18,7 @@ StorageStandby allows users to dictate exactly WHAT files are touched, and WHERE
 
 
 ## 💡 Features
-- automatic sync timings (WIP)
+- automatic sync timings (WIP - untested)
 -manage multiple different accounts for multiple providers (e.g. you can sync backups to three Google Drive accounts, two OneDrive accounts, and four Dropbox accounts)
 - ignore rules for synced folders (see [VS Code glob patterns reference](https://code.visualstudio.com/docs/editor/glob-patterns))
 - upload a remote version of a local folder to multiple different clouds
@@ -27,13 +27,15 @@ StorageStandby allows users to dictate exactly WHAT files are touched, and WHERE
 - system tray icon for easy access
 - notification center
 
+For a more clear explanation of the features, see [HOWTOUSE.md](https://github.com/James-Lian/StorageStandby/blob/main/HOWTOUSE.md).
+
 ## ⚙️ Technologies Used
 - Vite React Typescript frontend w/ shadcn-ui package
 - WPF middleware shell
 - ASP.NET C# Core backend running as a Windows Service
 
 ## 📃 How to Use
-See HOWTOUSE.md
+See [HOWTOUSE.md](https://github.com/James-Lian/StorageStandby/blob/main/HOWTOUSE.md)
 
 ## 🖼️ Images
 ![alt text](images/synctsx.png)

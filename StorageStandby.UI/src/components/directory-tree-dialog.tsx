@@ -106,7 +106,7 @@ export function DirectoryTreeDialog({
                     folderPath={folderPath}
                     ignoreRules={ignoreRules}
                 />
-                <p className="text-xs text-muted-foreground">Ignored paths are shown in red. Set ignored paths with ignore rules.</p>
+                <p className="text-xs text-muted-foreground">Ignored paths are shown in gray. Set ignored paths with ignore rules.</p>
             </DialogContent>
         </Dialog>
     )
