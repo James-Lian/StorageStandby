@@ -486,3 +486,5 @@ $RECYCLE.BIN/
 *.db-shm
 *.db-wal
 *.csproj.user
+
+appsettings.Production.json
