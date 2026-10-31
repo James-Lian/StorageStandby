@@ -141,6 +141,14 @@ namespace StorageStandby.Backend.Services
             ArgumentNullException.ThrowIfNull(ignoreRulesGlob);
             ArgumentException.ThrowIfNullOrWhiteSpace(path);
 
+            if (string.Equals(
+                    Path.GetFileName(path),
+                    "desktop.ini",
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
             string normalizedPath = path.Replace('\\', '/');
             string? normalizedBasePath = string.IsNullOrWhiteSpace(basePath)
                 ? null
