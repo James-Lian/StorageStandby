@@ -12,7 +12,7 @@ namespace StorageStandby.Backend.Data
             var optionsBuilder = new DbContextOptionsBuilder<AppDbContext>();
 
             // Tell the tool to use SQLite and point it to a local file for the schema generation
-            optionsBuilder.UseSqlite("Data Source=backupmanager.db");
+            optionsBuilder.UseSqlite("Data Source=storagestandby.db");
 
             return new AppDbContext(optionsBuilder.Options);
         }

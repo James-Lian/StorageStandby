@@ -125,6 +125,7 @@ namespace StorageStandby.Backend.Services
                 currentAccessToken,
                 refreshToken,
                 accountId);
+            await EnsureStorageStandbyRootFolderAsync(driveService, cancellationToken);
 
             var watchedFolder = await _db.WatchedFolders
                 .Include(folder => folder.AssignedClouds)
@@ -413,6 +414,48 @@ namespace StorageStandby.Backend.Services
             }
         }
 
+        private static async Task<string> EnsureStorageStandbyRootFolderAsync(
+            DriveService driveService,
+            CancellationToken cancellationToken)
+        {
+            const string rootName = "StorageStandby";
+            var listRequest = driveService.Files.List();
+            listRequest.Q = "'root' in parents"
+                + " and trashed = false"
+                + " and mimeType = 'application/vnd.google-apps.folder'"
+                + " and name = 'StorageStandby'";
+            listRequest.Spaces = "drive";
+            listRequest.Fields = "files(id,name,mimeType,parents)";
+
+            var matches = (await listRequest.ExecuteAsync(cancellationToken)).Files
+                ?? new List<Google.Apis.Drive.v3.Data.File>();
+            if (matches.Count > 1)
+            {
+                throw new InvalidOperationException(
+                    "Multiple StorageStandby folders exist at the Google Drive root.");
+            }
+
+            if (matches.Count == 1)
+            {
+                return matches[0].Id
+                    ?? throw new InvalidOperationException(
+                        "Google Drive did not return the StorageStandby folder ID.");
+            }
+
+            var metadata = new Google.Apis.Drive.v3.Data.File
+            {
+                Name = rootName,
+                MimeType = "application/vnd.google-apps.folder",
+                Parents = new List<string> { "root" }
+            };
+            var createRequest = driveService.Files.Create(metadata);
+            createRequest.Fields = "id";
+            var created = await createRequest.ExecuteAsync(cancellationToken);
+            return created.Id
+                ?? throw new InvalidOperationException(
+                    "Google Drive did not return the StorageStandby folder ID.");
+        }
+
         // Creates or replaces a Drive file using the local file contents.
         private async Task UploadAsync(
             DriveService driveService,
@@ -465,10 +508,35 @@ namespace StorageStandby.Backend.Services
                 accessToken,
                 refreshToken,
                 accountId);
+            string storageStandbyRootId = await EnsureStorageStandbyRootFolderAsync(
+                driveService,
+                cancellationToken);
+            var existingRequest = driveService.Files.List();
+            existingRequest.Q = $"'{storageStandbyRootId}' in parents"
+                + " and trashed = false"
+                + " and mimeType = 'application/vnd.google-apps.folder'"
+                + $" and name = '{folderName.Replace("'", "\\'")}'";
+            existingRequest.Spaces = "drive";
+            existingRequest.Fields = "files(id,name,mimeType,parents)";
+            var existingFolders = (await existingRequest.ExecuteAsync(cancellationToken)).Files
+                ?? new List<Google.Apis.Drive.v3.Data.File>();
+            if (existingFolders.Count > 1)
+            {
+                throw new InvalidOperationException(
+                    $"Multiple Google Drive folders named '{folderName}' exist under StorageStandby.");
+            }
+            if (existingFolders.Count == 1)
+            {
+                return existingFolders[0].Id
+                    ?? throw new InvalidOperationException(
+                        $"Google Drive did not return the ID for '{folderName}'.");
+            }
+
             var metadata = new Google.Apis.Drive.v3.Data.File
             {
                 Name = folderName,
-                MimeType = "application/vnd.google-apps.folder"
+                MimeType = "application/vnd.google-apps.folder",
+                Parents = new List<string> { storageStandbyRootId }
             };
             var request = driveService.Files.Create(metadata);
             request.Fields = "id";
@@ -495,6 +563,7 @@ namespace StorageStandby.Backend.Services
                 accessToken,
                 refreshToken,
                 accountId);
+            await EnsureStorageStandbyRootFolderAsync(driveService, cancellationToken);
             
             try
             {
@@ -529,6 +598,7 @@ namespace StorageStandby.Backend.Services
                 accessToken,
                 refreshToken,
                 accountId);
+            await EnsureStorageStandbyRootFolderAsync(driveService, cancellationToken);
 
             try
             {
@@ -597,6 +667,7 @@ namespace StorageStandby.Backend.Services
                 accessToken,
                 refreshToken,
                 accountId);
+            await EnsureStorageStandbyRootFolderAsync(driveService, cancellationToken);
             var about = await driveService.About.Get().ExecuteAsync(cancellationToken);
 
             ulong limit = (ulong)(about.StorageQuota?.Limit ?? 0L);
