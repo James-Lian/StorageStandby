@@ -636,6 +636,27 @@ app.MapGet("/api/syncevents", async (AppDbContext db) =>
     return Results.Ok(eventsByMostRecent);
 });
 
+app.MapGet("/api/timeline", async (
+    int? limit,
+    long? watchedFolderId,
+    AppDbContext db,
+    CancellationToken cancellationToken) =>
+{
+    int take = Math.Clamp(limit ?? 200, 1, 1000);
+    var query = db.TimelineEvents.AsNoTracking();
+    if (watchedFolderId.HasValue)
+    {
+        query = query.Where(item => item.WatchedFolderId == watchedFolderId.Value);
+    }
+
+    var events = await query
+        .OrderByDescending(item => item.OccurredAtUtc)
+        .ThenByDescending(item => item.Id)
+        .Take(take)
+        .ToListAsync(cancellationToken);
+    return Results.Ok(events);
+});
+
 // DB: PENDING FILE CHANGES
 app.MapGet("/api/sync/pending", async (AppDbContext db, CancellationToken cancellationToken) =>
 {

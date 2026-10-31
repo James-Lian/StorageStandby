@@ -70,6 +70,21 @@ export type SyncEvent = {
     unfinishedItemIds: string
 }
 
+export type TimelineEvent = {
+    id: number
+    watchedFolderId: number
+    syncEventId: number | null
+    occurredAtUtc: string
+    type: number
+    action: number
+    provider: Providers | null
+    accountId: string
+    pendingSyncItemId: number | null
+    localPath: string | null
+    message: string
+    details: string | null
+}
+
 export type PendingSyncItem = {
     id: number
     watchedFolderId: number

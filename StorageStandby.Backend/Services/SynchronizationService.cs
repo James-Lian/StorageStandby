@@ -201,6 +201,18 @@ namespace StorageStandby.Backend.Core
                 var queue = await db.PendingSyncQueue
                     .Where(item => item.WatchedFolderId == id)
                     .ToListAsync(cancellationToken);
+                var ignoredQueueItems = queue
+                    .Where(item => _fileSystem.IsFileIgnored(
+                        watchedFolder.IgnoreRules,
+                        item.LocalPath,
+                        watchedFolder.LocalPath))
+                    .ToList();
+                if (ignoredQueueItems.Count > 0)
+                {
+                    db.PendingSyncQueue.RemoveRange(ignoredQueueItems);
+                    queue = queue.Except(ignoredQueueItems).ToList();
+                    await db.SaveChangesAsync(cancellationToken);
+                }
                 // Returns existing remote locations and new locations awaiting bootstrap
                 var destinations = await DetermineSyncDestinations(watchedFolder, cancellationToken);
                 if (destinations.Count == 0)
@@ -265,6 +277,11 @@ namespace StorageStandby.Backend.Core
                         await db.SaveChangesAsync(cancellationToken);
                     }
                     bool isBootstrap = destination.Kind == SyncDestinationKind.Bootstrap;
+                    await ReconcileRemoteFolderAsync(
+                        db,
+                        watchedFolder,
+                        destination,
+                        cancellationToken);
 
                     // if bootstrap:
                     // |--> builds queue of PendingSyncItems with Created = true
@@ -288,12 +305,6 @@ namespace StorageStandby.Backend.Core
                     {
                         if (isBootstrap && Directory.Exists(watchedFolder.LocalPath))
                         {
-                            // creates the empty folder at the remote location
-                            await ReconcileRemoteFolderAsync(
-                                db,
-                                watchedFolder,
-                                destination,
-                                cancellationToken);
                             metadata.State = CloudAssignmentState.Active;
                             metadata.LastError = null;
                             var completedAssignments = watchedFolder.UserAssignedClouds.Where(item =>
@@ -344,17 +355,26 @@ namespace StorageStandby.Backend.Core
                     }
                     await db.SaveChangesAsync(cancellationToken);
                     hasDestinationWork = true;
+                    db.TimelineEvents.Add(new TimelineEvent
+                    {
+                        WatchedFolderId = id,
+                        SyncEventId = syncEvent.Id,
+                        Type = EventType.Info,
+                        Action = isBootstrap
+                            ? TimelineEventAction.CloudBootstrapStarted
+                            : TimelineEventAction.SyncStarted,
+                        Provider = destination.Provider,
+                        AccountId = destination.AccountId,
+                        Message = isBootstrap
+                            ? "Cloud bootstrap started."
+                            : "Cloud synchronization started."
+                    });
 
                     try
                     {
                         await EnsureDestinationHasCapacityAsync(
                             destination,
                             destinationQueue,
-                            cancellationToken);
-                        await ReconcileRemoteFolderAsync(
-                            db,
-                            watchedFolder,
-                            destination,
                             cancellationToken);
 
                         _state.SetUploading(true);
@@ -393,6 +413,34 @@ namespace StorageStandby.Backend.Core
                         {
                             completedDestination = true;
                             metadata.State = CloudAssignmentState.Active;
+                            foreach (string path in ParsePaths(syncEvent.SyncedItems))
+                            {
+                                db.TimelineEvents.Add(new TimelineEvent
+                                {
+                                    WatchedFolderId = id,
+                                    SyncEventId = syncEvent.Id,
+                                    Type = EventType.Success,
+                                    Action = TimelineEventAction.ItemUploaded,
+                                    Provider = destination.Provider,
+                                    AccountId = destination.AccountId,
+                                    LocalPath = path,
+                                    Message = "Item synchronized successfully."
+                                });
+                            }
+                            db.TimelineEvents.Add(new TimelineEvent
+                            {
+                                WatchedFolderId = id,
+                                SyncEventId = syncEvent.Id,
+                                Type = EventType.Success,
+                                Action = isBootstrap
+                                    ? TimelineEventAction.CloudBootstrapCompleted
+                                    : TimelineEventAction.SyncCompleted,
+                                Provider = destination.Provider,
+                                AccountId = destination.AccountId,
+                                Message = isBootstrap
+                                    ? "Cloud bootstrap completed."
+                                    : "Cloud synchronization completed."
+                            });
                             var completedAssignments = watchedFolder.UserAssignedClouds.Where(item =>
                                 item.WatchedFolderId == id
                                 && item.Provider == destination.Provider
@@ -406,10 +454,61 @@ namespace StorageStandby.Backend.Core
                         else
                         {
                             metadata.State = CloudAssignmentState.Failed;
+                            foreach (string path in ParsePaths(syncEvent.SyncedItems))
+                            {
+                                db.TimelineEvents.Add(new TimelineEvent
+                                {
+                                    WatchedFolderId = id,
+                                    SyncEventId = syncEvent.Id,
+                                    Type = EventType.Success,
+                                    Action = TimelineEventAction.ItemUploaded,
+                                    Provider = destination.Provider,
+                                    AccountId = destination.AccountId,
+                                    LocalPath = path,
+                                    Message = "Item synchronized before the destination reported failures."
+                                });
+                            }
+                            foreach (var failedItem in syncEvent.FailedItems)
+                            {
+                                db.TimelineEvents.Add(new TimelineEvent
+                                {
+                                    WatchedFolderId = id,
+                                    SyncEventId = syncEvent.Id,
+                                    Type = EventType.Error,
+                                    Action = TimelineEventAction.ItemFailed,
+                                    Provider = destination.Provider,
+                                    AccountId = destination.AccountId,
+                                    LocalPath = failedItem.FailedItem,
+                                    Message = "Item failed to synchronize.",
+                                    Details = failedItem.Details
+                                });
+                            }
+                            db.TimelineEvents.Add(new TimelineEvent
+                            {
+                                WatchedFolderId = id,
+                                SyncEventId = syncEvent.Id,
+                                Type = EventType.Warning,
+                                Action = TimelineEventAction.ItemFailed,
+                                Provider = destination.Provider,
+                                AccountId = destination.AccountId,
+                                Message = "Cloud synchronization completed with failures.",
+                                Details = $"Succeeded: {result.Succeeded}; failed: {result.Failed}; unfinished: {result.Unfinished}."
+                            });
                         }
                     }
                     catch (OperationCanceledException)
                     {
+                        db.TimelineEvents.Add(new TimelineEvent
+                        {
+                            WatchedFolderId = id,
+                            SyncEventId = syncEvent.Id,
+                            Type = EventType.Warning,
+                            Action = TimelineEventAction.SyncInterrupted,
+                            Provider = destination.Provider,
+                            AccountId = destination.AccountId,
+                            Message = "Cloud synchronization was interrupted."
+                        });
+                        await db.SaveChangesAsync(CancellationToken.None);
                         throw;
                     }
                     catch (Exception ex)
@@ -423,6 +522,17 @@ namespace StorageStandby.Backend.Core
                             Id = syncEvent.GetNextFailedItemId(),
                             FailedItem = string.Empty,
                             Details = ex.Message
+                        });
+                        db.TimelineEvents.Add(new TimelineEvent
+                        {
+                            WatchedFolderId = id,
+                            SyncEventId = syncEvent.Id,
+                            Type = EventType.Error,
+                            Action = TimelineEventAction.ItemFailed,
+                            Provider = destination.Provider,
+                            AccountId = destination.AccountId,
+                            Message = "Cloud synchronization failed.",
+                            Details = ex.ToString()
                         });
                     }
 
@@ -487,6 +597,12 @@ namespace StorageStandby.Backend.Core
             }
 
             return items;
+        }
+
+        private static IEnumerable<string> ParsePaths(string? value)
+        {
+            return (value ?? string.Empty)
+                .Split(';', StringSplitOptions.RemoveEmptyEntries);
         }
 
         // Removes items already recorded as uploaded for one destination from the incremental queue
@@ -575,7 +691,14 @@ namespace StorageStandby.Backend.Core
                 Providers.Google => await scope.ServiceProvider
                     .GetRequiredService<GoogleDriveProvider>()
                     .RemoteFolderExistsAsync(destination.AccountId, cloud.RemoteFolderId, cancellationToken),
-                _ => !string.IsNullOrWhiteSpace(cloud.RemoteFolderId)
+                Providers.Microsoft => await scope.ServiceProvider
+                    .GetRequiredService<OneDriveProvider>()
+                    .RemoteFolderExistsAsync(destination.AccountId, cloud.RemoteFolderId, cancellationToken),
+                Providers.Dropbox => await scope.ServiceProvider
+                    .GetRequiredService<DropboxProvider>()
+                    .RemoteFolderExistsAsync(destination.AccountId, cloud.RemoteFolderId, cancellationToken),
+                _ => throw new NotSupportedException(
+                    $"Remote folder verification is not implemented for {destination.Provider}.")
             };
             if (exists)
             {
@@ -1223,6 +1346,15 @@ namespace StorageStandby.Backend.Core
             if (pendingAssignment is not null)
             {
                 persistedFolder.UserAssignedClouds.Remove(pendingAssignment);
+                db.TimelineEvents.Add(new TimelineEvent
+                {
+                    WatchedFolderId = persistedFolder.Id,
+                    Type = EventType.Info,
+                    Action = TimelineEventAction.CloudRemovalRequested,
+                    Provider = provider,
+                    AccountId = accountId,
+                    Message = "Pending cloud assignment removed."
+                });
                 await db.SaveChangesAsync(cancellationToken);
                 return;
             }
@@ -1250,6 +1382,15 @@ namespace StorageStandby.Backend.Core
                 WatchedFolderId = persistedFolder.Id,
                 Provider = provider,
                 AccountId = accountId
+            });
+            db.TimelineEvents.Add(new TimelineEvent
+            {
+                WatchedFolderId = persistedFolder.Id,
+                Type = EventType.Info,
+                Action = TimelineEventAction.CloudRemovalRequested,
+                Provider = provider,
+                AccountId = accountId,
+                Message = "Cloud removal requested."
             });
             await db.SaveChangesAsync(cancellationToken);
         }
@@ -1329,6 +1470,15 @@ namespace StorageStandby.Backend.Core
                     Provider = provider,
                     AccountId = accountId,
                     WatchedFolderId = persistedFolder.Id
+                });
+                db.TimelineEvents.Add(new TimelineEvent
+                {
+                    WatchedFolderId = persistedFolder.Id,
+                    Type = EventType.Info,
+                    Action = TimelineEventAction.CloudAssignmentRequested,
+                    Provider = provider,
+                    AccountId = accountId,
+                    Message = "Cloud assignment requested."
                 });
                 await db.SaveChangesAsync(cancellationToken);
             }

@@ -871,9 +871,16 @@ namespace StorageStandby.Backend.Workers
                 return;
             }
 
+            var folder = _watchedFolderService.GetWatchedFolderFromId(watchedFolderId);
+            if (folder is null)
+            {
+                return;
+            }
+
             var childPaths = children.Files
                 .Select(path => new { Path = path, IsFolder = false })
                 .Concat(children.Folders.Select(path => new { Path = path, IsFolder = true }))
+                .Where(child => !_fileSystem.IsFileIgnored(folder.IgnoreRules, child.Path, folder.LocalPath))
                 .ToList();
 
             if (childPaths.Count == 0)

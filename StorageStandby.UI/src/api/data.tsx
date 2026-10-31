@@ -1,6 +1,6 @@
 import { logApiProblemDetailsError, readErrorDetails } from "@/lib/read-errors-utils";
 import { ErrorHandlingWrapper } from "./errorhandling";
-import type { DirectoryNode, PendingSyncItem, SyncEvent, SyncFrequency, SystemSettings, WatchedFolder } from "@/types/data";
+import type { DirectoryNode, PendingSyncItem, SyncEvent, SyncFrequency, SystemSettings, TimelineEvent, WatchedFolder } from "@/types/data";
 
 // ---------------------------------------------------------------------------
 // WATCHED FOLDERS
@@ -264,6 +264,28 @@ export async function resumeSyncEvent(
         if (!response.ok) {
             throw new Error(`${fName}: Failed to resume event`);
         }
+    });
+}
+
+export async function fetchTimelineEvents(
+    limit: number = 200,
+    watchedFolderId?: number,
+    fName: string = "fetchTimelineEvents",
+): Promise<TimelineEvent[]> {
+    return ErrorHandlingWrapper(fName, async () => {
+        const params = new URLSearchParams({ limit: String(limit) });
+        if (watchedFolderId !== undefined) {
+            params.set("watchedFolderId", String(watchedFolderId));
+        }
+
+        const response = await fetch(`http://storagestandby.local/api/timeline?${params}`);
+        if (!response.ok) {
+            const details = await readErrorDetails(response);
+            logApiProblemDetailsError({ fallbackTitle: `${fName}: response invalid`, details });
+            throw new Error(`${fName}: Failed to load timeline`);
+        }
+
+        return response.json();
     });
 }
 
