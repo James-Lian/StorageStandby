@@ -32,6 +32,13 @@ builder.WebHost.ConfigureKestrel(options =>
     options.ListenNamedPipe("StorageStandbyPipe");
 });
 
+var storageStandbyDataPath = Path.Combine(
+    Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+    "StorageStandby");
+var dataProtectionKeysPath = Path.Combine(storageStandbyDataPath, "data-protection-keys");
+Directory.CreateDirectory(storageStandbyDataPath);
+Directory.CreateDirectory(dataProtectionKeysPath);
+
 // Register Singleton State machine + long-running fileSystem watcher as a hosted background worker
 builder.Services.AddSingleton<BackupEngineState>();
 builder.Services.AddSingleton<TokenManager>();
@@ -42,7 +49,8 @@ builder.Services.AddSingleton<WatchedFolderService>();
 builder.Services.AddDbContext<AppDbContext>(options =>
 {
     // Tells EF Core to use SQLite and names the database file
-    options.UseSqlite("Data Source=storagestandby.db");
+    var databasePath = Path.Combine(storageStandbyDataPath, "storagestandby.db");
+    options.UseSqlite($"Data Source={databasePath};Journal Mode=WAL;");
 });
 builder.Services.AddScoped<GoogleDriveProvider>();
 builder.Services.AddScoped<OneDriveProvider>();
@@ -66,7 +74,8 @@ foreach (Providers provider in Enum.GetValues<Providers>())
 }
 
 // Register IDataProtectionProvider for encrypting sensitive data
-builder.Services.AddDataProtection();
+builder.Services.AddDataProtection()
+    .PersistKeysToFileSystem(new DirectoryInfo(dataProtectionKeysPath));
 
 // Configure CORS based on environment
 builder.Services.AddCors(options =>
