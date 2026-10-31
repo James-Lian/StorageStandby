@@ -454,3 +454,9 @@ dist-ssr
 *.sln
 *.sw?
 build_log.txt
+
+# Backend
+*.db
+*.db-shm
+*.db-wal
+*.csproj.user
