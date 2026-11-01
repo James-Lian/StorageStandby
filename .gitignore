@@ -454,5 +454,3 @@ dist-ssr
 *.sln
 *.sw?
 build_log.txt
-
-installer/**
