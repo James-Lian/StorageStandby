@@ -33,6 +33,10 @@ For a more clear explanation of the features, see [HOWTOUSE.md](https://github.c
 - Vite React Typescript frontend w/ shadcn-ui package
 - WPF middleware shell
 - ASP.NET C# Core backend running as a Windows Service
+- Inno Setup to build setup.exe distributable
+
+## 🪛 Installation
+Download the `StorageStandby-Setup.exe` file for a specific release in the [published releases](https://github.com/James-Lian/StorageStandby/releases).
 
 ## 📃 How to Use
 See [HOWTOUSE.md](https://github.com/James-Lian/StorageStandby/blob/main/HOWTOUSE.md)
