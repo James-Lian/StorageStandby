@@ -8,6 +8,6 @@
         mc:Ignorable="d"
         Title="StorageStandby" Height="896" Width="1163">
     <Grid>
-        <wv2:WebView2 Name="webView" Source="http://localhost:5173" />
+        <wv2:WebView2 Name="webView" />
     </Grid>
 </Window>

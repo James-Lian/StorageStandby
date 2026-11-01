@@ -40,7 +40,22 @@ namespace StorageStandby.Desktop
 #if !DEBUG
                 StartBackendProcess();
 #endif
-                _ = InitializeWebViewBridge();  
+                _ = InitializeWebViewBridge().ContinueWith(task =>
+                {
+                    if (!task.IsFaulted)
+                    {
+                        return;
+                    }
+
+                    Exception exception = task.Exception?.GetBaseException()
+                        ?? new InvalidOperationException("WebView2 initialization failed.");
+                    Debug.WriteLine($"[InitializeWebViewBridge] Fatal error: {exception}");
+                    Dispatcher.Invoke(() => System.Windows.MessageBox.Show(
+                        $"StorageStandby could not initialize its web interface.\n\n{exception}",
+                        "StorageStandby startup error",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Error));
+                }, TaskScheduler.Default);
             }
             catch (Exception ex)
             {
@@ -111,6 +126,24 @@ namespace StorageStandby.Desktop
             });
         }
 
+        private static void WriteBridgeDiagnostic(string message)
+        {
+            try
+            {
+                string logDirectory = System.IO.Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "StorageStandby");
+                Directory.CreateDirectory(logDirectory);
+                File.AppendAllText(
+                    System.IO.Path.Combine(logDirectory, "desktop-bridge.log"),
+                    $"{DateTime.Now:O} {message}{Environment.NewLine}");
+            }
+            catch
+            {
+                // Diagnostics must never affect request handling.
+            }
+        }
+
         protected override void OnClosing(System.ComponentModel.CancelEventArgs e)
         {
             if (!_isExiting)
@@ -144,19 +177,38 @@ namespace StorageStandby.Desktop
         private async Task InitializeWebViewBridge()
         {
             Debug.WriteLine("[InitializeWebViewBridge] Starting");
-            // initialize underlying Chromium engine
-            await webView.EnsureCoreWebView2Async();
+#if DEBUG
+            const string webViewProfileName = "WebView2-Development";
+#else
+            const string webViewProfileName = "WebView2";
+#endif
+            string webViewDataPath = System.IO.Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "StorageStandby",
+                webViewProfileName);
+            Directory.CreateDirectory(webViewDataPath);
+            WriteBridgeDiagnostic($"Initializing WebView bridge. Profile: {webViewDataPath}");
+
+            // Keep Chromium's writable profile outside Program Files inside the %LOCALAPPDATA% folder
+            CoreWebView2Environment webViewEnvironment =
+                await CoreWebView2Environment.CreateAsync(userDataFolder: webViewDataPath);
+            await webView.EnsureCoreWebView2Async(webViewEnvironment);
             Debug.WriteLine("[InitializeWebViewBridge] WebView2 ready");
             webView.CoreWebView2.WebMessageReceived += OnWebMessageReceived;
 
             // native .NET IPC magic: setup HttpClient to tunnel requests down the Named Pipe
+#if DEBUG
+            const string storageStandbyPipeName = "StorageStandbyPipe-Development";
+#else
+            const string storageStandbyPipeName = "StorageStandbyPipe";
+#endif
             var socketsHandler = new SocketsHttpHandler
             {
                 ConnectCallback = async (context, cancellationToken) =>
                 {
                     var pipeClientStream = new NamedPipeClientStream(
                         serverName: ".",
-                        pipeName: "StorageStandbyPipe",
+                        pipeName: storageStandbyPipeName,
                         PipeDirection.InOut,
                         PipeOptions.Asynchronous
                     );
@@ -166,7 +218,7 @@ namespace StorageStandby.Desktop
                 }
             };
 
-            _pipeClient = new HttpClient(socketsHandler) { BaseAddress = new Uri("http://storagestandby.local") };
+            _pipeClient = new HttpClient(socketsHandler) { BaseAddress = new Uri("http://storagestandby-api.local") };
             //_pipeClient.BaseAddress = new Uri("http://localhost:5000"); // Replace with your pipe server address
 
             // intercept browser web reqs (e.g. fetch()) from Vite frontend and tunnel them over the Windows kernel pipe
@@ -176,10 +228,13 @@ namespace StorageStandby.Desktop
                 var uri = new Uri(request.Uri);
 
                 Debug.WriteLine($"[WebResourceRequested] Intercepted: {uri}");
+                WriteBridgeDiagnostic($"Web resource: {request.Method} {uri}");
 
-                if (uri.Host == "storagestandby.local")
+                if (uri.Host == "storagestandby-api.local" &&
+                    uri.AbsolutePath.StartsWith("/api/", StringComparison.OrdinalIgnoreCase))
                 {
-                    Debug.WriteLine($"[WebResourceRequested] Matched storagestandby.local, getting deferral");
+                    WriteBridgeDiagnostic($"API request: {request.Method} {uri.PathAndQuery}");
+                    Debug.WriteLine($"[WebResourceRequested] Matched storagestandby-api.local, getting deferral");
                     var deferral = args.GetDeferral();
 
                     try
@@ -232,6 +287,7 @@ namespace StorageStandby.Desktop
                         Debug.WriteLine($"[WebResourceRequested] Sending through Named Pipe...");
                         // send it down the Named Pipe
                         var response = await _pipeClient.SendAsync(outboundRequest);
+                        WriteBridgeDiagnostic($"API response: {(int)response.StatusCode} {uri.PathAndQuery}");
                         Debug.WriteLine($"[WebResourceRequested] Response Status: {response.StatusCode}");
 
                         string content = await response.Content.ReadAsStringAsync();
@@ -244,8 +300,9 @@ namespace StorageStandby.Desktop
 
                         foreach (var header in response.Headers)
                         {
-                            // Skip Transfer-Encoding header - WebView2 needs Content-Length instead
-                            if (header.Key.Equals("Transfer-Encoding", StringComparison.OrdinalIgnoreCase))
+                            // Rebuild framing headers below for WebView2.
+                            if (header.Key.Equals("Transfer-Encoding", StringComparison.OrdinalIgnoreCase) ||
+                                header.Key.Equals("Content-Length", StringComparison.OrdinalIgnoreCase))
                                 continue;
 
                             foreach (var value in header.Value)
@@ -260,8 +317,9 @@ namespace StorageStandby.Desktop
                         {
                             foreach (var header in response.Content.Headers)
                             {
-                                // Skip Transfer-Encoding here too
-                                if (header.Key.Equals("Transfer-Encoding", StringComparison.OrdinalIgnoreCase))
+                                // Rebuild framing headers below for WebView2.
+                                if (header.Key.Equals("Transfer-Encoding", StringComparison.OrdinalIgnoreCase) ||
+                                    header.Key.Equals("Content-Length", StringComparison.OrdinalIgnoreCase))
                                     continue;
 
                                 foreach (var value in header.Value)
@@ -312,6 +370,7 @@ namespace StorageStandby.Desktop
                     }
                     catch (Exception ex)
                     {
+                        WriteBridgeDiagnostic($"API bridge error for {uri}: {ex}");
                         Debug.WriteLine($"[InitializeWebViewBridge] Error: {ex}");
                         System.Windows.MessageBox.Show($"WebView2 initialization failed: {ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
 
@@ -333,18 +392,25 @@ namespace StorageStandby.Desktop
 
             };
 
-            // tell WebView2 to filter and catch any reuqests heading to our virtual API domain
-            webView.CoreWebView2.AddWebResourceRequestedFilter("http://storagestandby.local/*", Microsoft.Web.WebView2.Core.CoreWebView2WebResourceContext.All);
+            // Observe the virtual host broadly, but only tunnel API requests through the pipe.
+            // Non-API requests fall through to the virtual host folder mapping below.
+            webView.CoreWebView2.AddWebResourceRequestedFilter("http://storagestandby-api.local/*", Microsoft.Web.WebView2.Core.CoreWebView2WebResourceContext.All);
+            WriteBridgeDiagnostic("WebResourceRequested filter registered.");
 
-            // Set up virtual domain mapping in both DEBUG and Release
-            // This tells WebView2: "If someone visits http://app.local, serve files from this physical folder."
+#if !DEBUG
+            // In Release, serve the compiled frontend from the desktop publish folder.
             string virtualHostFolderPath = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "dist");
 
-           webView.CoreWebView2.SetVirtualHostNameToFolderMapping(
-               "storagestandby.local",
-               virtualHostFolderPath,
-               Microsoft.Web.WebView2.Core.CoreWebView2HostResourceAccessKind.Allow
-           );
+            webView.CoreWebView2.SetVirtualHostNameToFolderMapping(
+                "storagestandby.local",
+                virtualHostFolderPath,
+                Microsoft.Web.WebView2.Core.CoreWebView2HostResourceAccessKind.Allow
+            );
+            WriteBridgeDiagnostic($"Virtual host mapped to: {virtualHostFolderPath}");
+#endif
+
+            webView.CoreWebView2.NavigationCompleted += (_, args) =>
+                WriteBridgeDiagnostic($"Navigation completed: {webView.Source} success={args.IsSuccess} error={args.WebErrorStatus}");
 
 #if DEBUG
             // In Development (F5), use Vite's live server for instant hot-reloading
