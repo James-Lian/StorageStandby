@@ -21,6 +21,18 @@ using Microsoft.VisualBasic;
 // Backend ASP.NET Core C# project
 // Uses built-in web server (Kestrel) to listen to a local pipe instead of an open network port
 
+#if DEBUG
+const string storageStandbyPipeName = "StorageStandbyPipe-Development";
+var storageStandbyDataPath = Path.Combine(
+    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+    "StorageStandby-Development");
+#else
+const string storageStandbyPipeName = "StorageStandbyPipe";
+var storageStandbyDataPath = Path.Combine(
+    Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+    "StorageStandby");
+#endif
+
 var builder = WebApplication.CreateBuilder(args);
 
 // run as native Windows Service
@@ -29,12 +41,9 @@ builder.Host.UseWindowsService();
 // configure Kestrel to listen to named pipe instead of traditional TCP port
 builder.WebHost.ConfigureKestrel(options =>
 {
-    options.ListenNamedPipe("StorageStandbyPipe");
+    options.ListenNamedPipe(storageStandbyPipeName);
 });
 
-var storageStandbyDataPath = Path.Combine(
-    Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
-    "StorageStandby");
 var dataProtectionKeysPath = Path.Combine(storageStandbyDataPath, "data-protection-keys");
 Directory.CreateDirectory(storageStandbyDataPath);
 Directory.CreateDirectory(dataProtectionKeysPath);
