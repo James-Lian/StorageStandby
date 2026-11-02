@@ -1,4 +1,4 @@
-# StorageStandby: A hybrid fullstack Windows application that automatically backs up your files
+# StorageStandby: A native Windows backups manager for your files
 
 Stardance tracker project: https://stardance.hackclub.com/projects/27442 (began development June 2026)
 
